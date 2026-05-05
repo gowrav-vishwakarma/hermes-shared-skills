@@ -1,0 +1,86 @@
+# Standalone Video Generation Config Template
+
+Use this template when building a JSON config directly (without using `generate_video_config.py` helper).
+
+## Structure
+
+```json
+{
+    "params": {
+        "prompt": "Your video prompt text",
+        "model_type": "ltx2",
+        "base_model_type": "ltx2",
+        "num_inference_steps": 8,
+        "cfg_scale": 3.5,
+        "seed": 42,
+        "fps": 24,
+        "video_length": 480,
+        "width": 768,
+        "height": 480,
+        "image_profile": 4,
+        "video_profile": 4,
+        "audio_profile": 3.5,
+        "loras": [
+            {
+                "name": "Pixar_Toon",
+                "multiplier": 1.5,
+                "path": "loras/ltx2/Pixar_Toon.safetensors"
+            }
+        ],
+        "attention": "sage2",
+        "dtype": "fp16",
+        "compile": true,
+        "multi_prompts_gen_type": "FG"
+    }
+}
+```
+
+## Key fields
+
+| Field | Description | Default | Notes |
+|-------|-------------|---------|-------|
+| `prompt` | Full video prompt (single string, no line breaks) | required | Use director-style prompting |
+| `model_type` | Model identifier | `ltx2` | Must match a model in `_settings.json` |
+| `num_inference_steps` | Denoising steps | 8 | Higher = better quality but slower |
+| `cfg_scale` | Classifier-free guidance | 3.5 | 3-5 typical range |
+| `seed` | Random seed for reproducibility | 42 | Same seed + same prompt = same output |
+| `fps` | Frames per second | 24 | LTX-2.3 default |
+| `video_length` | Total frames | 480 | For 20s at 24fps: 480; 10s: 240 |
+| `width` | Video width in pixels | 768 | Aspect ratio affects this |
+| `height` | Video height in pixels | 480 | For 16:9: 1280x720, for 9:16: 480x720 |
+| `loras` | List of LoRA configs | empty array | Style LoRAs need multiplier ≥ 1.5 |
+| `attention` | Attention mechanism | `sage2` | `sage2` or `sdpa` |
+| `dtype` | Precision | `fp16` | `fp16` or `bf16` |
+| `compile` | TorchInductor compile | false | `true` speeds up subsequent runs |
+| `multi_prompts_gen_type` | Prompt processing mode | `FG` | `FG` = all lines are one prompt |
+| `image_profile` | Inference profile | 4 | GPU VRAM budget level (1-4, higher = more VRAM) |
+| `video_profile` | Video profile | 4 | Same as image_profile |
+
+## Aspect ratio guide
+
+| Aspect | Resolution | Width × Height |
+|--------|-----------|----------------|
+| 16:9 Landscape | HD | 1280 × 720 |
+| 16:9 Landscape | 4K | 2048 × 1152 |
+| 9:16 Portrait | Reels/Shorts | 480 × 720 |
+| 1:1 Square | — | 512 × 512 |
+
+## LoRA format
+
+```json
+"loras": [
+    {
+        "name": "Pixar_Toon",
+        "multiplier": 1.5,
+        "path": "loras/ltx2/Pixar_Toon.safetensors"
+    }
+]
+```
+
+Style LoRAs (Pixar_Toon, Fantasy_Realism, etc.) need multiplier **≥ 1.0**, typically 1.5 for visible effect. Default 0.5 produces no visible change.
+
+## Usage
+
+1. Save this JSON to a `.json` file
+2. Run: `wgp.py --process <config.json> --output-dir <output-dir> --compile --attention sage2 --profile 4 --fp16`
+3. Output videos go into the specified output directory

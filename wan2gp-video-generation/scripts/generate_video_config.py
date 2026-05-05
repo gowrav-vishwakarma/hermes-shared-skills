@@ -1,0 +1,303 @@
+#!/usr/bin/env python3
+"""generate_video_config.py -- WanGP video_generation.json builder for LTX-2.3.
+
+Reads an LTX-2.3 template (T2V or I2V), applies CLI overrides, writes a
+full WanGP `--process` task JSON to <output-dir>/video_generation.json.
+
+Why this exists:
+    Authoring a 50-key WanGP video JSON by hand is the #1 source of
+    config mistakes (missing `sliding_window_size`, wrong `image_mode`,
+    legacy `start_image` field, mismatched `video_length`, etc). This
+    script clones the right template and patches only what the agent
+    explicitly changes.
+
+Stdlib only (json, argparse, pathlib, copy, subprocess). Safe with
+system `python3` -- does NOT import torch / diffusers.
+
+Usage (T2V):
+    python3 generate_video_config.py \\
+        --prompt "EXT. ALIEN STATION DECK..." \\
+        --output-filename character_aurora_reel \\
+        --output-dir /home/.../posts/2026-04-30_5
+
+Usage (I2V from anchor):
+    python3 generate_video_config.py \\
+        --prompt "EXT. ALIEN STATION DECK..." \\
+        --image-start /home/.../posts/2026-04-30_5/character_aurora_anchor.jpg \\
+        --output-filename character_aurora_reel \\
+        --output-dir /home/.../posts/2026-04-30_5
+
+Add `--run` to also execute `wgp.py --process` from the WanGP venv.
+"""
+
+from __future__ import annotations
+
+import argparse
+import copy
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+SKILL_DIR = SCRIPT_DIR.parent
+TEMPLATES_DIR = SKILL_DIR / "templates"
+
+sys.path.insert(0, str(SCRIPT_DIR))
+try:
+    from _env import required  # type: ignore
+finally:
+    try:
+        sys.path.remove(str(SCRIPT_DIR))
+    except ValueError:
+        pass
+
+WAN_APP_DIR = required("WAN_APP_DIR")
+
+TEMPLATE_ALIASES = {
+    "default": "ltx-2.3-t2v.json",
+    "t2v": "ltx-2.3-t2v.json",
+    "i2v": "ltx-2.3-i2v.json",
+    "ltx": "ltx-2.3-t2v.json",
+    "ltx-t2v": "ltx-2.3-t2v.json",
+    "ltx-i2v": "ltx-2.3-i2v.json",
+    "ltx-2.3-t2v": "ltx-2.3-t2v.json",
+    "ltx-2.3-i2v": "ltx-2.3-i2v.json",
+    "16x9": "ltx-2.3-t2v-16x9.json",
+    "t2v-16x9": "ltx-2.3-t2v-16x9.json",
+    "i2v-16x9": "ltx-2.3-i2v-16x9.json",
+    "ltx-16x9": "ltx-2.3-t2v-16x9.json",
+    "ltx-t2v-16x9": "ltx-2.3-t2v-16x9.json",
+    "ltx-i2v-16x9": "ltx-2.3-i2v-16x9.json",
+    "ltx-2.3-t2v-16x9": "ltx-2.3-t2v-16x9.json",
+    "ltx-2.3-i2v-16x9": "ltx-2.3-i2v-16x9.json",
+}
+
+ASPECT_RESOLUTIONS = {
+    "9:16": "720x1280",
+    "16:9": "1280x720",
+}
+
+HF_LTX_BASE = "https://huggingface.co/DeepBeepMeep/LTX-2/resolve/main"
+
+MODEL_CONFIGS: dict[str, dict] = {
+    "gguf": {
+        "model_filename": f"{HF_LTX_BASE}/ltx-2.3-22b-distilled-Q6_K_light.gguf",
+        "model_type": "ltx2_22B_distilled_gguf_q6_k",
+        "base_model_type": "ltx2_22B",
+        "num_inference_steps": 8,
+    },
+    "distilled-1.1": {
+        "model_filename": f"{HF_LTX_BASE}/ltx-2.3-22b-distilled-1.1_diffusion_model_quanto_bf16_int8.safetensors",
+        "model_type": "ltx2_22B_distilled_1_1",
+        "base_model_type": "ltx2_22B",
+        "num_inference_steps": 8,
+    },
+}
+
+MODEL_CHOICES = sorted(MODEL_CONFIGS)
+
+
+def resolve_template(template_arg: str | None, image_start: str | None,
+                     aspect: str | None = None) -> Path:
+    """Pick a template file based on shorthand, path, anchor presence, or aspect."""
+    if template_arg:
+        candidate = Path(template_arg)
+        if candidate.is_file():
+            return candidate
+        alias = TEMPLATE_ALIASES.get(template_arg.lower())
+        if alias:
+            return TEMPLATES_DIR / alias
+        guess = TEMPLATES_DIR / template_arg
+        if guess.is_file():
+            return guess
+        raise SystemExit(
+            f"[generate_video_config] template not found: {template_arg!r}. "
+            f"Aliases: {sorted(TEMPLATE_ALIASES)}"
+        )
+    is_landscape = aspect == "16:9"
+    if image_start:
+        return TEMPLATES_DIR / ("ltx-2.3-i2v-16x9.json" if is_landscape else "ltx-2.3-i2v.json")
+    return TEMPLATES_DIR / ("ltx-2.3-t2v-16x9.json" if is_landscape else "ltx-2.3-t2v.json")
+
+
+def build_settings(template_path: Path, args: argparse.Namespace) -> dict:
+    template = json.loads(template_path.read_text())
+    settings = copy.deepcopy(template)
+
+    # --- Model config overlay (before CLI scalars so explicit flags win) ---
+    mcfg = MODEL_CONFIGS[args.model]
+    settings["model_filename"] = mcfg["model_filename"]
+    settings["model_type"] = mcfg["model_type"]
+    settings["base_model_type"] = mcfg["base_model_type"]
+    if args.steps is None:
+        settings["num_inference_steps"] = mcfg["num_inference_steps"]
+    for key in ("sample_solver", "audio_guidance_scale", "alt_guidance_scale",
+                "alt_scale", "perturbation_switch", "perturbation_layers",
+                "perturbation_start_perc", "perturbation_end_perc",
+                "apg_switch", "cfg_star_switch"):
+        if key in mcfg:
+            settings[key] = mcfg[key]
+    if args.guidance_scale is None and "guidance_scale" in mcfg:
+        settings["guidance_scale"] = mcfg["guidance_scale"]
+
+    # --- Prompt / output ---
+    settings["prompt"] = args.prompt
+    if args.alt_prompt is not None:
+        settings["alt_prompt"] = args.alt_prompt
+    if args.negative_prompt is not None:
+        settings["negative_prompt"] = args.negative_prompt
+
+    settings["output_filename"] = args.output_filename
+    settings["resolution"] = args.resolution
+    settings["seed"] = args.seed
+
+    if args.video_length is not None:
+        settings["video_length"] = args.video_length
+        # Keep sliding_window_size aligned so CLI runs one continuous shot
+        # instead of multiple chunked windows (see SKILL.md normalization).
+        settings["sliding_window_size"] = args.video_length
+
+    if args.steps is not None:
+        settings["num_inference_steps"] = args.steps
+    if args.guidance_scale is not None:
+        settings["guidance_scale"] = args.guidance_scale
+    if args.audio_scale is not None:
+        settings["audio_scale"] = args.audio_scale
+    if args.loras_multipliers is not None:
+        settings["loras_multipliers"] = args.loras_multipliers
+    if args.activated_loras is not None:
+        settings["activated_loras"] = args.activated_loras
+
+    if args.no_loras:
+        settings["activated_loras"] = []
+        settings["loras_multipliers"] = ""
+
+    if args.image_start:
+        # LTX-2.3 native I2V (`image_mode: 1`) crashes at the VAE step in
+        # WanGP. The proven workaround keeps `image_mode: 0` and feeds the
+        # anchor through `image_prompt_type: "S"` + `input_video_strength: 1`
+        # (see wan2gp-video-generation/SKILL.md "LTX-2.3 I2V Crash Bypass").
+        settings["image_mode"] = 0
+        settings["image_prompt_type"] = "S"
+        settings["input_video_strength"] = 1
+        settings["image_start"] = args.image_start
+
+    return settings
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        description="Build a WanGP LTX-2.3 video_generation.json from a template + overrides."
+    )
+    ap.add_argument("--prompt", required=True, help="LTX-2.3 cinematic prompt.")
+    ap.add_argument("--alt-prompt", default=None)
+    ap.add_argument("--negative-prompt", default=None)
+    ap.add_argument(
+        "--image-start", default=None,
+        help="Absolute path to anchor JPG/PNG (auto-switches template to I2V).",
+    )
+    ap.add_argument("--output-filename", required=True,
+                    help="WanGP `output_filename` (basename, no extension).")
+    ap.add_argument("--output-dir", required=True,
+                    help="Destination folder. video_generation.json is written here.")
+    ap.add_argument("--aspect", default=None, choices=["9:16", "16:9"],
+                    help="Aspect ratio shorthand. Sets resolution and picks the "
+                         "matching template when --resolution/--template are not "
+                         "given. 9:16=720x1280 (portrait), 16:9=1280x720 (landscape).")
+    ap.add_argument("--resolution", default=None,
+                    help="WxH (e.g. 720x1280 or 1280x720). Overrides --aspect. "
+                         "Default: derived from --aspect, or 720x1280 if neither given.")
+    ap.add_argument("--seed", type=int, default=-1)
+    ap.add_argument("--video-length", type=int, default=None,
+                    help="Frames; template default is 481 (~20s @ 24fps). "
+                         "Also rewrites sliding_window_size to match.")
+    ap.add_argument("--steps", type=int, default=None,
+                    help="num_inference_steps override (template default 8-10).")
+    ap.add_argument("--guidance-scale", type=float, default=None)
+    ap.add_argument("--audio-scale", type=float, default=None)
+    ap.add_argument("--loras-multipliers", default=None)
+    ap.add_argument("--activated-loras", nargs="*", default=None)
+    ap.add_argument("--no-loras", action="store_true",
+                    help="Clear all LoRAs (overrides template defaults).")
+    ap.add_argument("--model", default="gguf", choices=MODEL_CHOICES,
+                    help="LTX-2.3 checkpoint variant. Sets model_filename, model_type, "
+                         f"and num_inference_steps. Choices: {MODEL_CHOICES}. "
+                         "Default: gguf.")
+    ap.add_argument("--template", default=None,
+                    help=f"Template path or alias. Aliases: {sorted(TEMPLATE_ALIASES)}")
+    ap.add_argument("--run", action="store_true",
+                    help="After writing JSON, execute wgp.py --process via WanGP venv.")
+    ap.add_argument("--extra-wgp-args", nargs=argparse.REMAINDER, default=[],
+                    help="Extra args appended to wgp.py when --run is set.")
+    args = ap.parse_args()
+
+    out_dir = Path(args.output_dir).expanduser().resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.resolution is None:
+        args.resolution = ASPECT_RESOLUTIONS.get(args.aspect, "720x1280")
+
+    template_path = resolve_template(args.template, args.image_start, args.aspect)
+    settings = build_settings(template_path, args)
+
+    out_path = out_dir / "video_generation.json"
+    out_path.write_text(json.dumps(settings, indent=4) + "\n")
+
+    print(str(out_path))
+    active_loras = settings.get("activated_loras", [])
+    loras_str = ", ".join(active_loras) if active_loras else "none"
+    print(
+        f"[generate_video_config] model={args.model} template={template_path.name} "
+        f"resolution={settings['resolution']} "
+        f"steps={settings['num_inference_steps']} "
+        f"video_length={settings['video_length']} "
+        f"sliding_window_size={settings['sliding_window_size']} "
+        f"image_start={'yes' if args.image_start else 'no'} "
+        f"loras=[{loras_str}]",
+        file=sys.stderr,
+    )
+    if args.image_start:
+        # Anchor <-> Reel coherence reminder. LTX-2.3 in I2V mode decodes from
+        # the anchor as frame 0, so the prompt opening MUST mirror the anchor
+        # composition (same INT/EXT, same pose, same wardrobe, same light) and
+        # MUST NOT contain hard cuts. See video-create-workflow SKILL.md ->
+        # "Anchor <-> Reel coherence" and wan2gp-video-generation SKILL.md ->
+        # "Opening frame must mirror your I2V anchor (no hard cuts)".
+        print(
+            "[generate_video_config] coherence reminder: image_start is set, so "
+            "LTX-2.3 will decode from the anchor as frame 0. Verify the prompt "
+            "opens with the SAME composition as the anchor (same INT/EXT, pose, "
+            "wardrobe, light source, view through windows) and contains NO hard "
+            "cuts (no 'CUT TO', 'cuts to ...', 'JUMP CUT', 'MEANWHILE'). Reveal "
+            "new elements via camera moves only.",
+            file=sys.stderr,
+        )
+
+    if args.run:
+        if not WAN_APP_DIR.is_dir():
+            print(f"[generate_video_config] WanGP app dir not found: {WAN_APP_DIR}",
+                  file=sys.stderr)
+            return 2
+        env_python_str = os.environ.get("WAN_PYTHON")
+        env_python = Path(env_python_str) if env_python_str else WAN_APP_DIR / "env" / "bin" / "python"
+        if not env_python.is_file():
+            print(f"[generate_video_config] WanGP venv python missing: {env_python}",
+                  file=sys.stderr)
+            return 2
+        cmd = [
+            str(env_python), "wgp.py",
+            "--process", str(out_path),
+            "--output-dir", str(out_dir),
+            "--compile", "--attention", "sage2",
+            "--profile", "4", "--fp16",
+            *args.extra_wgp_args,
+        ]
+        print(f"[generate_video_config] running: {' '.join(cmd)}", file=sys.stderr)
+        return subprocess.call(cmd, cwd=str(WAN_APP_DIR))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
