@@ -34,7 +34,7 @@ def parse_etime(etime_str: str) -> int:
     if len(parts) == 3:
         h, m, s = int(parts[0]), int(parts[1]), int(parts[2])
     elif len(parts) == 2:
-        h, m = 0, int(parts[0]), int(parts[1])
+        h, m, s = int(parts[0]), int(parts[1]), 0
     else:
         h = m = s = 0
 

@@ -12,7 +12,7 @@ metadata:
 
 # Movie Pipeline
 
-Orchestrates multi-scene movies as an autonomous background pipeline. The agent writes a full `movie_script.json` upfront (all scenes, prompts, asset refs), then kicks off a Python runner that handles anchor generation, video generation, compression, and final concatenation -- scene by scene, with GPU gating and crash recovery.
+Orchestrates multi-scene movies as an autonomous background pipeline. The agent writes a full `movie_script.json` upfront (all scenes, prompts, image refs), then kicks off a Python runner that handles anchor generation, video generation, compression, and final concatenation -- scene by scene, with GPU gating and crash recovery.
 
 ## When to use
 
@@ -35,9 +35,9 @@ Used by this skill:
 - `POSTS_DIR` -- `$PROFILE_HOME/posts` (movies live here as `<YYYY-MM-DD_movie_X>/`)
 - `WAN_APP_DIR` -- WanGP app dir (contains `wgp.py`, `env/bin/python`)
 - `WAN_PYTHON` -- `$WAN_APP_DIR/env/bin/python`
-- `CHARACTER_ASSETS_DIR` -- `$PROFILE_HOME/assets`
-- `CHARACTER_ASSETS_MANIFEST` -- `$CHARACTER_ASSETS_DIR/assets.json`
 - `CHARACTER_BASE` -- `$PROFILE_HOME/character.png`
+
+**NOT used by movies:** `CHARACTER_ASSETS_DIR` and `CHARACTER_ASSETS_MANIFEST` (`assets.json`) belong to the journey workflow (`video-create-workflow`) only. Movies are self-contained -- see "Asset isolation" below.
 
 Throughout this doc, `<movie-dir>` is shorthand for `$POSTS_DIR/YYYY-MM-DD_movie_<tag>`.
 
@@ -49,6 +49,10 @@ Movies live inside `$POSTS_DIR/` with `_movie_` in the slug:
 $POSTS_DIR/2026-05-04_movie_fantasy/
 ├── movie_script.json           # Creative source of truth (all scenes)
 ├── progress.json               # Execution state (resumable)
+├── character_base.jpg          # Copied from $CHARACTER_BASE (if character needed)
+├── assets/                     # Movie-local assets (NOT in main manifest)
+│   ├── location_enchanted_forest.jpg
+│   └── prop_staff.jpg
 ├── scene_01/
 │   ├── image_generation.json   # Anchor config (written by pipeline)
 │   ├── scene_01_anchor.jpg     # Anchor image
@@ -62,6 +66,20 @@ $POSTS_DIR/2026-05-04_movie_fantasy/
 ```
 
 Resolve the movie slug as: `YYYY-MM-DD_movie_<short_tag>` where `<short_tag>` is a 1-2 word snake_case descriptor (e.g., `fantasy`, `love_story`, `adventure`).
+
+## Asset isolation (movies vs journey)
+
+Movies are **self-contained entities**. They do NOT use the shared character asset manifest (`assets.json`) or `$CHARACTER_ASSETS_DIR`. Those belong exclusively to the journey workflow (`video-create-workflow`) for regular posts.
+
+**Rules for movie assets:**
+
+1. **Never read from or write to `assets.json`.** The manifest is for the ongoing character journey only.
+2. **Copy `$CHARACTER_BASE` into `<movie-dir>/character_base.jpg`** if the character appears in any scene. This is the only bridge between the profile identity and the movie.
+3. **Generate movie-specific assets into `<movie-dir>/assets/`** (locations, props, creatures). Use `generate_image_config.py --run` with `--output-dir <movie-dir>/assets/` directly -- do NOT use `generate_asset.py` (that registers into the manifest).
+4. **Reference images by relative path** in `movie_script.json` via the `image_refs` field (relative to `<movie-dir>`). Examples: `"character_base.jpg"`, `"assets/location_enchanted_forest.jpg"`.
+5. **Movie assets are disposable.** They live and die with the movie folder. Deleting a movie folder cleans up everything.
+
+**Why this separation exists:** The asset manifest tracks a character's evolving visual identity across a journey of posts -- outfit variants, recurring locations, vehicles. Movies are standalone creative pieces with their own art direction. Mixing them pollutes the journey manifest with one-off movie props and makes asset cleanup painful.
 
 ## movie_script.json schema
 
@@ -77,7 +95,7 @@ Resolve the movie slug as: `YYYY-MM-DD_movie_<short_tag>` where `<short_tag>` is
     {
       "id": "scene_01",
       "title": "Portal Discovery",
-      "ref_assets": ["character_fantasy", "location_enchanted_forest", "prop_staff"],
+      "image_refs": ["character_base.jpg", "assets/location_enchanted_forest.jpg"],
       "anchor_prompt": "Cinematic medium shot, 9:16. Meena standing in enchanted forest...",
       "anchor_filename": "scene_01_anchor",
       "video_prompt": "INT. ENCHANTED FOREST -- TWILIGHT. Camera pushes in as...",
@@ -86,6 +104,8 @@ Resolve the movie slug as: `YYYY-MM-DD_movie_<short_tag>` where `<short_tag>` is
   ]
 }
 ```
+
+**`image_refs`**: List of image paths **relative to `<movie-dir>`**. These are passed as `--image-refs` (absolute paths resolved by the pipeline) to `generate_image_config.py`. Max 3 refs (Qwen cap). Use `"character_base.jpg"` for identity locking. Order must match the prompt's image-index references (image 1, image 2, etc.).
 
 **Seed rule**: The top-level `seed` applies to ALL scenes uniformly. Scenes do NOT have individual seed overrides. This ensures visual consistency across the entire movie.
 
@@ -103,20 +123,44 @@ Resolve the movie slug as: `YYYY-MM-DD_movie_<short_tag>` where `<short_tag>` is
 
 Before writing any script, plan the full story arc:
 - Define the narrative beats for each scene
-- Identify which assets exist and which need to be bootstrapped
-- Verify all `ref_assets` slugs exist in `$CHARACTER_ASSETS_MANIFEST`
+- Identify which movie-local images need to be generated in `<movie-dir>/assets/` (locations, props, creatures)
+- Decide if the character appears -- if yes, `character_base.jpg` will be copied in Step 2b
 - Confirm the story with the user before proceeding
 
 ### Step 2: Write movie_script.json
 
-Write the complete `movie_script.json` with ALL scenes, prompts, and asset references. Use `write_file` to create it in the movie directory. Every scene must have:
+Write the complete `movie_script.json` with ALL scenes, prompts, and image references. Use `write_file` to create it in the movie directory. Every scene must have:
 - `id`: `scene_01`, `scene_02`, etc.
 - `title`: short descriptive name
-- `ref_assets`: list of asset slugs for the anchor (max 3)
-- `anchor_prompt`: full Qwen Image Edit Plus prompt
+- `image_refs`: list of image paths relative to `<movie-dir>` (max 3). E.g., `["character_base.jpg", "assets/location_forest.jpg"]`
+- `anchor_prompt`: full Qwen Image Edit Plus prompt (image-index order must match `image_refs` order)
 - `anchor_filename`: basename without extension (e.g., `scene_01_anchor`)
 - `video_prompt`: full LTX-2.3 director-style prompt
 - `video_filename`: basename without extension (e.g., `scene_01_video`)
+
+### Step 2b: Bootstrap movie assets
+
+Before running the pipeline, generate all assets the movie needs **locally** inside `<movie-dir>`:
+
+1. **Copy character base** (if character appears in any scene):
+   ```bash
+   cp "$CHARACTER_BASE" <movie-dir>/character_base.jpg
+   ```
+
+2. **Generate movie-specific locations/props/creatures** into `<movie-dir>/assets/`:
+   ```bash
+   mkdir -p <movie-dir>/assets
+   python3 "$PROFILE_SKILLS/wan2gp-image-generation/scripts/generate_image_config.py" \
+       --prompt "EXT. enchanted forest clearing. No character visible. Towering ancient trees..." \
+       --output-filename location_enchanted_forest \
+       --output-dir <movie-dir>/assets \
+       --aspect 9:16 \
+       --seed <movie-seed> \
+       --run
+   ```
+   Use `generate_image_config.py` (NOT `generate_asset.py` -- that registers into the journey manifest).
+
+3. **Verify all `image_refs`** in `movie_script.json` point to existing files before proceeding.
 
 ### Step 3: Initialize
 
@@ -185,7 +229,7 @@ The pipeline enforces these rules automatically:
 
 ## Common pitfalls
 
-1. **Missing assets.** Before writing `movie_script.json`, verify all `ref_assets` slugs exist in `$CHARACTER_ASSETS_MANIFEST`. The `init_movie.py` script validates this and will error if slugs are missing.
+1. **Missing local images.** Before running the pipeline, verify all `image_refs` paths in `movie_script.json` resolve to actual files inside `<movie-dir>`. The `init_movie.py` script validates this and will error on missing files. Run Step 2b (bootstrap) first.
 
 2. **Seed inconsistency.** Never add per-scene seeds. The movie-level seed ensures visual consistency. If you need a different seed, change the top-level `seed` and re-run.
 

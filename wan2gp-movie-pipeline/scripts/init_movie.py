@@ -19,34 +19,17 @@ from pathlib import Path
 
 REQUIRED_MOVIE_FIELDS = {"title", "aspect", "seed", "scenes"}
 REQUIRED_SCENE_FIELDS = {
-    "id", "title", "ref_assets", "anchor_prompt",
+    "id", "title", "image_refs", "anchor_prompt",
     "anchor_filename", "video_prompt", "video_filename",
 }
 VALID_ASPECTS = {"9:16", "16:9"}
 VALID_MODELS = {"gguf", "distilled-1.1"}
 
-_SCRIPT_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(_SCRIPT_DIR))
-try:
-    from _env import required  # type: ignore
-finally:
-    try:
-        sys.path.remove(str(_SCRIPT_DIR))
-    except ValueError:
-        pass
+def validate_script(script: dict, movie_dir: Path) -> list[str]:
+    """Return a list of validation errors (empty = valid).
 
-ASSETS_MANIFEST = required("CHARACTER_ASSETS_MANIFEST")
-
-
-def load_manifest() -> dict:
-    if not ASSETS_MANIFEST.is_file():
-        return {}
-    data = json.loads(ASSETS_MANIFEST.read_text())
-    return data.get("assets", {})
-
-
-def validate_script(script: dict, manifest: dict) -> list[str]:
-    """Return a list of validation errors (empty = valid)."""
+    Validates image_refs as local paths relative to movie_dir (no manifest).
+    """
     errors: list[str] = []
 
     for field in REQUIRED_MOVIE_FIELDS:
@@ -85,18 +68,19 @@ def validate_script(script: dict, manifest: dict) -> list[str]:
             errors.append(f"{prefix}: duplicate scene id '{sid}'")
         seen_ids.add(sid)
 
-        for slug in scene.get("ref_assets", []):
-            if slug not in manifest:
-                errors.append(
-                    f"{prefix}: ref_asset '{slug}' not found in assets.json. "
-                    f"Available: {sorted(manifest.keys())}"
-                )
-
-        if len(scene.get("ref_assets", [])) > 3:
+        image_refs = scene.get("image_refs", [])
+        if len(image_refs) > 3:
             errors.append(
-                f"{prefix}: ref_assets has {len(scene['ref_assets'])} entries; "
+                f"{prefix}: image_refs has {len(image_refs)} entries; "
                 f"Qwen Image Edit Plus caps at 3"
             )
+        for ref_path in image_refs:
+            resolved = movie_dir / ref_path
+            if not resolved.is_file():
+                errors.append(
+                    f"{prefix}: image_ref '{ref_path}' not found at {resolved}. "
+                    f"Run Step 2b (bootstrap movie assets) before init."
+                )
 
     return errors
 

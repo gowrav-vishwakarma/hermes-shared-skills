@@ -8,7 +8,7 @@
     "video_length": 1,
     "batch_size": 1,
     "seed": -1,
-    "num_inference_steps": 28,
+    "num_inference_steps": 30,
     "guidance_scale": 4,
     "guidance_phases": 1,
     "sample_solver": "default",
