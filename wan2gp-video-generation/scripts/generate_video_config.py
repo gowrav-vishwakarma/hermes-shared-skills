@@ -42,6 +42,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import math
 import os
 import subprocess
 import sys
@@ -105,6 +106,21 @@ MODEL_CONFIGS: dict[str, dict] = {
 
 MODEL_CHOICES = sorted(MODEL_CONFIGS)
 
+LTX2_LATENT_SIZE = 8
+LTX2_FPS = 24
+
+
+def _align_frames(n: int, latent_size: int = LTX2_LATENT_SIZE) -> int:
+    """Snap frame count to the nearest valid value (must satisfy (n-1) % latent_size == 0)."""
+    return (n - 1) // latent_size * latent_size + 1
+
+
+def _compute_window_count(video_length: int, window_size: int,
+                          discard_last: int, overlap: int) -> int:
+    """Mirror WanGP's compute_sliding_window_no formula."""
+    left = video_length - window_size + discard_last
+    return 1 + math.ceil(left / (window_size - discard_last - overlap))
+
 
 def resolve_template(template_arg: str | None, image_start: str | None,
                      aspect: str | None = None,
@@ -163,9 +179,10 @@ def build_settings(template_path: Path, args: argparse.Namespace) -> dict:
 
     if args.video_length is not None:
         settings["video_length"] = args.video_length
-        # Keep sliding_window_size aligned so CLI runs one continuous shot
-        # instead of multiple chunked windows (see SKILL.md normalization).
-        settings["sliding_window_size"] = args.video_length
+    if args.sliding_window_size is not None:
+        settings["sliding_window_size"] = args.sliding_window_size
+    if args.sliding_window_overlap is not None:
+        settings["sliding_window_overlap"] = args.sliding_window_overlap
 
     if args.steps is not None:
         settings["num_inference_steps"] = args.steps
@@ -241,8 +258,17 @@ def main() -> int:
                          "Default: derived from --aspect, or 720x1280 if neither given.")
     ap.add_argument("--seed", type=int, default=-1)
     ap.add_argument("--video-length", type=int, default=None,
-                    help="Frames; template default is 481 (~20s @ 24fps). "
-                         "Also rewrites sliding_window_size to match.")
+                    help="Total frames to generate; template default is 481 (~20s @ 24fps). "
+                         "Set higher than sliding_window_size for multi-window "
+                         "extended videos (e.g. 961 for ~40s).")
+    ap.add_argument("--sliding-window-size", type=int, default=None,
+                    help="Frames per generation window; template default is 481. "
+                         "When video_length > this value, WanGP generates multiple "
+                         "overlapping windows and stitches them. Max 501 for LTX2.")
+    ap.add_argument("--sliding-window-overlap", type=int, default=None,
+                    help="Overlap frames between consecutive windows (default 17 "
+                         "from template). More overlap = smoother transitions. "
+                         "Must be aligned to latent step (valid: 1, 9, 17, 25...).")
     ap.add_argument("--steps", type=int, default=None,
                     help="num_inference_steps override (template default 8-10).")
     ap.add_argument("--guidance-scale", type=float, default=None)
@@ -279,17 +305,41 @@ def main() -> int:
     print(str(out_path))
     active_loras = settings.get("activated_loras", [])
     loras_str = ", ".join(active_loras) if active_loras else "none"
+    vlen = settings["video_length"]
+    wsize = settings["sliding_window_size"]
+    woverlap = settings["sliding_window_overlap"]
     print(
         f"[generate_video_config] model={args.model} template={template_path.name} "
         f"resolution={settings['resolution']} "
         f"steps={settings['num_inference_steps']} "
-        f"video_length={settings['video_length']} "
-        f"sliding_window_size={settings['sliding_window_size']} "
+        f"video_length={vlen} "
+        f"sliding_window_size={wsize} "
+        f"sliding_window_overlap={woverlap} "
         f"image_start={'yes' if args.image_start else 'no'} "
         f"video_source={'yes' if args.video_source else 'no'} "
         f"loras=[{loras_str}]",
         file=sys.stderr,
     )
+    if vlen > wsize:
+        discard = settings.get("sliding_window_discard_last_frames", 0)
+        n_windows = _compute_window_count(vlen, wsize, discard, woverlap)
+        duration_s = vlen / LTX2_FPS
+        print(
+            f"[generate_video_config] EXTENDED VIDEO: {n_windows} sliding windows "
+            f"will be generated for ~{duration_s:.1f}s total ({vlen} frames). "
+            f"Each window is {wsize} frames with {woverlap} frames overlap. "
+            f"Estimated time: ~{n_windows * 3.5:.0f} min (distilled-1.1, RTX 4090).",
+            file=sys.stderr,
+        )
+        if not args.image_start and not args.video_source:
+            print(
+                "[generate_video_config] WARNING: multi-window with T2V (no "
+                "--image-start or --video-source). Each window generates "
+                "independently without seeing prior frames. This may produce "
+                "repetitive/disconnected output. Consider using --image-start "
+                "or --video-source for coherent extended videos.",
+                file=sys.stderr,
+            )
     if args.video_source:
         print(
             "[generate_video_config] continue mode: video_source is set, so "

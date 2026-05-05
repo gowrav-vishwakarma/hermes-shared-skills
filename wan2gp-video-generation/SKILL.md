@@ -6,7 +6,7 @@ category: media
 
 # WanGP Video Generation (LTX-2.3)
 
-Generate ~20 s videos (481 frames @ 24 fps) with native audio using **LTX-2.3 22B distilled** through WanGP CLI. Supports **text-to-video** (T2V) and **image-to-video** (I2V) -- the helper auto-picks from `--image-start`.
+Generate videos with native audio using **LTX-2.3 22B distilled** through WanGP CLI. Default is ~20 s (481 frames @ 24 fps) in a single pass. For longer videos, WanGP's **sliding window** mechanism generates multiple overlapping windows and stitches them -- see "Extended Videos" below. Supports **text-to-video** (T2V) and **image-to-video** (I2V) -- the helper auto-picks from `--image-start`.
 
 ## Environment variables
 
@@ -540,6 +540,91 @@ Typical results (720x1280, 20s): 54-88 MB input compresses to 3.8-4.7 MB (~91-95
 
 ---
 
+## Extended Videos (> 20 seconds)
+
+LTX-2.3 can generate a maximum of ~481 frames (~20s) in a **single window**. To create longer videos, WanGP uses a **sliding window** mechanism: it generates overlapping chunks and stitches them into one continuous output.
+
+### How sliding windows work
+
+When `video_length > sliding_window_size`, WanGP automatically activates multi-window mode:
+
+1. **Window 1** generates frames 1 through `sliding_window_size` (e.g., 481).
+2. **Window 2** reuses the last `sliding_window_overlap` frames from Window 1 as conditioning, then generates the next chunk. The overlapped frames ensure visual continuity.
+3. This repeats until the total `video_length` is reached.
+4. WanGP stitches all windows into a single output video automatically.
+
+### Parameters
+
+| Parameter | Template default | Description |
+|---|---|---|
+| `video_length` | 481 | Total frames to generate. Set higher for longer videos. |
+| `sliding_window_size` | 481 | Frames per window. Keep at 481 for max quality per chunk. Max reliable value is 481 (handler allows 501 but values above 481 may crash). |
+| `sliding_window_overlap` | 17 | Frames shared between consecutive windows for continuity. Valid LTX2 values: 1, 9, 17, 25 (must satisfy `(n-1) % 8 == 0`). Higher = smoother transitions, more redundant computation. |
+| `sliding_window_discard_last_frames` | 0 | Drop N frames from the end of each window before stitching. Can help if window endings have artifacts. Must be divisible by 8. |
+
+### Duration reference
+
+| Desired duration | `video_length` | Windows (w/ overlap=17) | Estimated time (RTX 4090) |
+|---|---|---|---|
+| ~20s (default) | 481 | 1 | ~3-4 min |
+| ~30s | 721 | 2 | ~7 min |
+| ~40s | 961 | 3 | ~10-11 min |
+| ~60s | 1441 | 3-4 | ~14-15 min |
+
+Frame counts should satisfy `(n-1) % 8 == 0` for LTX2 (valid: 481, 489, 497, ..., 721, ..., 961). WanGP auto-aligns if not exact.
+
+### Example: 30-second I2V video
+
+**Step A -- config with extended length:**
+```bash
+python3 "$PROFILE_SKILLS/wan2gp-video-generation/scripts/generate_video_config.py" \
+    --prompt "EXT. MOUNTAIN RIDGE -- GOLDEN HOUR. The character walks along a ridge path..." \
+    --image-start "$POSTS_DIR/2026-05-05_1/ridge_anchor.jpg" \
+    --output-filename ridge_extended_reel \
+    --output-dir "$POSTS_DIR/2026-05-05_1" \
+    --aspect 9:16 \
+    --video-length 721 \
+    --sliding-window-size 481 \
+    --seed 742981
+```
+
+The helper will report: `EXTENDED VIDEO: 2 sliding windows will be generated for ~30.0s total`.
+
+**Step B -- background execution** (same as standard):
+```bash
+"$WAN_PYTHON" "$WAN_APP_DIR/wgp.py" \
+    --process "$POSTS_DIR/2026-05-05_1/video_generation.json" \
+    --output-dir "$POSTS_DIR/2026-05-05_1" \
+    --compile --attention sage2 --profile 4 --fp16
+```
+
+### Quality notes
+
+- **I2V is strongly recommended** for extended videos. With `--image-start` or `--video-source`, each window conditions on prior frames, maintaining visual continuity. Pure T2V (no anchor) generates each window independently -- the windows will look disconnected.
+- **Watch for color/lighting drift** at window boundaries in very long videos (3+ windows). The `sliding_window_color_correction_strength` parameter (0 by default) can help -- set to a small value (0.1-0.3) if you notice color shifts.
+- **Prompt length matters even more** for extended videos. A short prompt spread over 40+ seconds leaves the model directionless after the first window. Write detailed, temporally structured prompts that describe action across the full duration.
+- **VRAM usage is the same** as a single-pass 20s video -- each window is processed independently at `sliding_window_size` frames. No additional VRAM needed for longer videos.
+
+- **Extended video output files.** When `--video-length > 481` (sliding window mode), WanGP writes **multiple output files** during a single job:
+  - `{output_filename}.mp4` — first window output (~20s, partial)
+  - `{output_filename}(2).mp4` — **THIS IS THE COMPLETE STITCHED VIDEO** (target duration, e.g. 30s+)
+  - More files may appear for 3+ windows: `(3).mp4`, etc.
+  - **Do NOT concatenate them.** The last file (`(N).mp4`) is the final stitched result.
+  - The last file is always the one to compress and deliver.
+
+### Sliding window vs movie pipeline continue_from
+
+Two approaches exist for longer content:
+
+| Goal | Approach | When to use |
+|---|---|---|
+| Single continuous shot > 20s (same camera, fluid motion) | Sliding window (`--video-length > --sliding-window-size`) | Extending a scene's duration seamlessly |
+| Multi-scene narrative (different prompts, locations, compositions) | Movie pipeline `continue_from` or `anchor_from_last_frame` | Chaining distinct scenes into a movie |
+
+The sliding window produces one continuous video file. The movie pipeline produces separate scene files that are concatenated.
+
+---
+
 ## Helper invocation -- split into two steps
 
 > ### ⚠ CRITICAL: Use `--process`, NEVER `--settings`
@@ -589,6 +674,20 @@ python3 "$PROFILE_SKILLS/wan2gp-video-generation/scripts/generate_video_config.p
 ```
 Sets `image_prompt_type: "V"` (WanGP "Continue Video" mode). Mutually exclusive with `--image-start`. Optional `--keep-frames-video-source` controls how many source frames to keep (empty=all). Primarily used by `wan2gp-movie-pipeline` for `continue_from` scenes -- see that skill for full details.
 
+**Extended video (~30s, sliding window):**
+```bash
+python3 "$PROFILE_SKILLS/wan2gp-video-generation/scripts/generate_video_config.py" \
+    --prompt "EXT. MOUNTAIN RIDGE -- GOLDEN HOUR. <long detailed prompt covering ~30s of action>..." \
+    --image-start "$POSTS_DIR/2026-05-05_1/ridge_anchor.jpg" \
+    --output-filename ridge_extended_reel \
+    --output-dir "$POSTS_DIR/2026-05-05_1" \
+    --aspect 9:16 \
+    --video-length 721 \
+    --sliding-window-size 481 \
+    --seed 742981
+```
+Sets `video_length: 721` (30s) with `sliding_window_size: 481`. WanGP generates 2 overlapping windows automatically. Use `--sliding-window-overlap` to tune overlap (default 17 from template). See "Extended Videos" section for full details.
+
 ### Step B: Start background execution (survives agent timeout)
 
 ```bash
@@ -616,7 +715,7 @@ If any wgp.py is running, DO NOT start a new one (24 GB VRAM / OOM risk). Wait f
 - **NEVER use `--run` flag.** Always use the split Step A + Step B approach.
 - **`$WAN_APP_DIR` points at the `/app/` subdirectory** of the WanGP install (e.g., `/home/gowrav/pinokio/api/wan.git/app`), not the git repo root. `wgp.py` and `env/bin/python` live inside that `app/` directory.
 
-The helper auto-applies the I2V crash-bypass (`image_mode: 0`, `image_prompt_type: "S"`, `input_video_strength: 1`), aligns `sliding_window_size` with `video_length` for a one-pass shot, and prints a coherence reminder when `--image-start` is set. Agents do not configure these details manually.
+The helper auto-applies the I2V crash-bypass (`image_mode: 0`, `image_prompt_type: "S"`, `input_video_strength: 1`) and prints a coherence reminder when `--image-start` is set. By default, `video_length` and `sliding_window_size` are both 481 (single-pass ~20s). To generate longer videos, pass `--video-length <frames>` with `--sliding-window-size 481` -- see "Extended Videos" section below.
 
 **LoRAs:** Templates ship with no LoRAs by default (`activated_loras: []`). To add LoRAs, pass `--activated-loras` with the desired LoRA filenames and `--loras-multipliers` with their weights. See [`references/ltx2-3-loras.md`](references/ltx2-3-loras.md) for the full inventory and feature-gated LoRA behavior.
 
@@ -629,11 +728,12 @@ The helper supports two LTX-2.3 checkpoints via `--model <alias>`:
 | `gguf`  | Q6_K GGUF (16 GB) | 8 | Fastest | Day-to-day iteration, quick previews |
 | `distilled-1.1` (default) | Distilled v1.1 int8 (19 GB) | 8 | Fast | Need WanGP auto-HDR/outpaint/union-control LoRAs |
 
-> **Benchmark data (RTX 4090, 720x1280, 20s video):**
-> - `gguf` (8 steps): ~3-4 min total, no compilation needed (gguf runtime is C++, already compiled)
-> - `distilled-1.1` (8 steps): ~3-4 min gen, ~5-8 min first run (TorchInductor compile), ~3-4 min cached re-run
+> **Critical GGUF caveat:** The GGUF model's llama.cpp CUDA kernels are often unavailable on this setup (`[GGUF][llama.cpp CUDA] kernels unavailable, using fallback`). This causes GPU-incompatible inference falling back to CPU, making GGUF **slower than distilled-1.1** despite being "fastest" on paper. **If GPU utilization stays below 80% during GGUF generation, switch to distilled-1.1 immediately.** GGUF is worth trying only if you verify GPU utilization spikes to 90%+ within 30s of starting.
 
-> **Why gguf is fast:** GGUF runtime is llama.cpp (C++ based), weights are pre-compiled and quantized at build time. No PyTorch compilation needed. Loading = "read weights, map to GPU VRAM, go".
+> **Benchmark data (RTX 4090, 720x1280, 20s video):**
+- **distilled-1.1** (8 steps): ~3-4 min gen, ~5-8 min first run (TorchInductor compile), ~3-4 min cached re-run
+
+> **Why distilled-1.1 is preferred:** Despite the first-run compilation delay, distilled-1.1 uses PyTorch/Triton which runs on GPU properly. GGUF uses llama.cpp CUDA kernels which may be unavailable on some setups, causing CPU fallback. See GGUF pitfall below.
 
 > **Why distilling helps:** Distilled version is a simpler/smaller architecture. Even with PyTorch runtime, it has fewer compute-heavy layers, plus only 8 steps like gguf. The `distilled-1.1` model has WanGP auto-loaded internal LoRAs (HDR, outpaint, union-control) that improve quality without extra steps.
 
@@ -684,6 +784,7 @@ When the helper prints `[generate_video_config] coherence reminder:`, verify bef
 
 ## Pitfalls
 
+- **Concatenating sliding window output files (WRONG).** When `video_length > sliding_window_size`, WanGP writes intermediate files during generation: `{name}.mp4` (partial, first window only), then `{name}(2).mp4`, `{name}(3).mp4`, etc. **The LAST file is the complete stitched video** — it already contains ALL windows merged. Do NOT `ffmpeg -f concat` the files together; that creates a garbage file (e.g., 50s instead of 30s with the first 20s duplicated). **Correct workflow:** find the last `(N).mp4` file, compress it, deliver it. Delete the partial earlier files. See `references/sliding-window-output-files.md`. Session evidence (2026-05-05, Meena nature reel): mistakenly concatenated `nature_reel_30s.mp4` + `nature_reel_30s(2).mp4` → 50s garbage. The `(2).mp4` alone was the correct 30s result.
 - **Using `--run` flag.** KILLS the job on agent turn timeout. The 5-6 minute generation never completes because the terminal call is killed. Always split into config-write + background-exec.
 - **Wrong flags.** `--image-ref` does NOT exist -- use `--image-start`. `--aspect-ratio` does NOT exist -- use `--aspect` (preferred) or `--resolution "WxH"`.
 - **Aggressive polling.** Polling the monitor script repeatedly creates message spam in Telegram. Use `notify_on_complete=true` as primary method. Only poll once as fallback, never in a loop.
@@ -693,6 +794,8 @@ When the helper prints `[generate_video_config] coherence reminder:`, verify bef
 - **Exit code 127 — env vars not expanded.** If `$WAN_APP_DIR` / `$WAN_PYTHON` are not exported in the shell, the command line expands to `/env/bin/python` (empty prefix) and bash returns `No such file or directory` with exit code 127. Recovery: `set -a; source $PROFILE_ROOT/.env; set +a` then retry. When invoking from a Python subprocess, pass `env={**os.environ}` after sourcing, or set the keys explicitly via `env_vars={...}` on the terminal call.
 
 - **Exit code 1 — `models/_settings.json` not found (CWD mismatch).** Running `wgp.py` from any directory other than `$WAN_APP_DIR` causes `FileNotFoundError: models/_settings.json`. The binary loads model config relative to CWD. **Fix:** Always run with `cwd="$WAN_APP_DIR"` (`workdir: "$WAN_APP_DIR"` in terminal calls).
+- **GGUF `model_filename` must be local path, not HF URL.** When using `--model gguf`, the `model_filename` in `video_generation.json` MUST point to a local `.gguf` file (e.g., `/home/gowrav/pinokio/api/wan.git/app/ckpts/ltx-2.3-22b-distilled-Q6_K_light.gguf`). HuggingFace URLs (e.g., `https://huggingface.co/...`) only work if the model was previously downloaded to the HF cache. If the file doesn't exist locally, WanGP crashes with `FileNotFoundError`. **Always verify the GGUF file exists at the local path before starting generation.** Session evidence (2026-05-05): Job with HF URL crashed on `FileNotFoundError: No such file or directory: 'models/_settings.json'` — the underlying cause was the model not being downloaded, not the settings file.
+- **No hands/props/object interactions in prompts.** LTX-2.3 cannot reliably generate hands or fingers — outputs show distorted/melded digits or missing hands. **Explicitly avoid** any prompt content involving hand gestures, holding objects, fidgeting with props, or interacting with items. Session evidence (2026-05-05): User request "not more object interactions or hands as ai cannot generate fingures etc well" — confirmed pattern. Safe actions: facial expressions only, head turns, shoulder movements, hair movement, camera moves. Avoid: fidgeting with dupatta, hand gestures, holding items, touching objects.
 
 - **`wgp.py` path resolution failure (exit code 2).** Use absolute paths for BOTH the interpreter and `wgp.py`, AND set `cwd` explicitly:
   ```bash
@@ -723,6 +826,8 @@ When the helper prints `[generate_video_config] coherence reminder:`, verify bef
 - **Video-source (continue mode) vs image-start for scene transitions.** When using `--video-source` (WanGP Continue Video), the model generates frames that continue from the SOURCE video's last frames. This is ideal for **extending the same shot** (adding duration, same camera angle, smooth motion). It is NOT appropriate for **location/scene transitions** (e.g., cliff → practice room, city → stage). For location changes, the model will try to morph the source scene into the new scene, causing visual artifacts and unwanted content. **Always use `--image-start` with the character anchor** for new scene/location compositions. Continue mode = extend same scene. Image-start = new scene composition.
 
 - **Scene timing benchmarks (distilled-1.1, RTX 4090, 1280x720, ~20s).** First scene: ~3:56 (includes TorchInductor compilation). Subsequent scenes: ~3:30-3:38 (cached compilation). Total per scene is consistent at ~3:35 once compiled. A 6-scene movie takes ~22 minutes total (generation only, no manual intervention between scenes).
+
+- **LTX-2.3 per-window frame cap is 481 for reliable generation.** The `sliding_window_size` should be 481 (20s @ 24fps). The WanGP handler allows up to 501 but values above 481 **will crash** during execution with `Sliding Window Size must be at most 481`. **The total `video_length` can be HIGHER than 481** -- when `video_length > sliding_window_size`, WanGP automatically generates multiple overlapping windows and stitches them. See the "Extended Videos" section. For single-pass generation, keep both `video_length` and `sliding_window_size` at 481. **Session evidence (2026-05-05):** Job using 501 crashed immediately. Confirmed: hard cap is 481.
 
 - **`monitor_video_gen.py` etime parse bug.** The `parse_etime` function in `monitor_video_gen.py` had a bug on line 37 where `h, m = 0, int(parts[0]), int(parts[1])` tried to unpack 3 values into 2 variables, causing `ValueError: too many values to unpack`. **Fix:** changed to `h, m, s = int(parts[0]), int(parts[1]), 0`. If you encounter this error on a fresh checkout, apply the same fix. Patch applied to skill as of 2026-05-05.
 - **`$CHARACTER_ASSETS_MANIFEST` (when using `--ref-assets` in video).** The video config helper imports `asset_manifest.py`, which is now a strict consumer of `$CHARACTER_ASSETS_MANIFEST`. If the env var is missing the script exits immediately with `[env] required env var 'CHARACTER_ASSETS_MANIFEST' not set`. Source `$PROFILE_ROOT/.env` to fix.
@@ -771,5 +876,6 @@ posts/2026-05-02_7/
 - [`references/telegram-timeout-fix.md`](references/telegram-timeout-fix.md) — Diagnosis of the Telegram agent-turn timeout problem with `--run`.
 - [`references/orphan-process-hang.md`](references/orphan-process-hang.md) — GPU deadlock case study from May 3.
 - [`references/video-delivery-pattern.md`](references/video-delivery-pattern.md) — Video delivery workflow.
+- [`references/sliding-window-output-files.md`](references/sliding-window-output-files.md) — Extended video output file pattern (do NOT concatenate).
 - [`references/wan-app-dir-discovery.md`](references/wan-app-dir-discovery.md) — WanGP app directory discovery.
 - [`references/telegram-delivery-pattern.md`](references/telegram-delivery-pattern.md) — Telegram delivery pattern.

@@ -92,11 +92,20 @@ Movies are **self-contained entities**. They do NOT use the shared character ass
 
 ## Video continuation (extended scenes)
 
-Movies often need scenes longer than a single 20-second generation, or need visual continuity when transitioning between scenes. Two continuation modes are available:
+Movies often need scenes longer than a single 20-second generation, or need visual continuity when transitioning between scenes. Three approaches are available:
+
+### Approach 0: Sliding window (single scene > 20s)
+
+For a single continuous shot that just needs more duration (same scene, same camera flow), use the **sliding window** mechanism in `wan2gp-video-generation` rather than splitting into multiple movie scenes. Set `video_length` higher than `sliding_window_size` in the scene's video config and WanGP generates overlapping windows stitched into one video automatically.
+
+This is the simplest approach when a scene needs 30-60 seconds instead of 20. No extra movie scenes needed, no `continue_from` chaining. See the "Extended Videos" section in `wan2gp-video-generation` for parameter details.
+
+**When to use:** A single unbroken shot needs more than 20 seconds of duration.
+**When NOT to use:** You need a different prompt, camera angle, or composition mid-way -- use Approach A or B below instead.
 
 ### Approach A: `continue_from` (WanGP native Continue Video)
 
-Best for **extending a shot** -- same camera angle, smooth motion continuation, adding more duration to an existing scene.
+Best for **chaining scenes with different prompts** -- the new scene picks up from where the previous one ended, but can describe entirely new action.
 
 - Skips anchor generation entirely (no `anchor_prompt` or `image_refs` needed)
 - Passes the referenced scene's completed video as `--video-source` to WanGP
@@ -141,7 +150,8 @@ Best for **scene transitions** -- new camera angle, new composition, but startin
 
 | Goal | Mode | Key |
 |------|------|-----|
-| Extend a shot (more duration, same camera) | Continue Video | `continue_from` |
+| Single shot needs > 20s (same prompt, fluid motion) | Sliding window | Set `video_length > sliding_window_size` in video config |
+| Chain scenes with different prompts/action | Continue Video | `continue_from` |
 | New composition from where previous ended | Last Frame | `anchor_from_last_frame` |
 | Fresh scene, no continuity needed | Normal | Neither field |
 

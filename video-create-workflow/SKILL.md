@@ -138,7 +138,9 @@ When the user asks for multiple reels (e.g., "make 5 reels — fun, dance, seduc
    ```
    Target: ~3-5MB per video. Compressed files follow the pattern `<name>_compressed.mp4` and sit next to the raw video. Compression takes ~10-20s. Skip compression if the raw file is already under 20MB.
 
-8. **Batch-mode shortcut: `--run` flag.** When processing multiple reels in a movie-like sequence where anchors and prompts are already validated, use the helper scripts' `--run` flag to combine config generation + GPU execution in one command. This skips the split approach (Step A + Step B) and is faster for batch processing. Only use this when you're confident in the config — for first-time or experimental posts, use the split approach for debugging.
+8. **Extended video (sliding window) output: do NOT concatenate.** When `video_length > 481` (sliding window mode), WanGP writes multiple intermediate files: `{name}.mp4` (partial first window), `{name}(2).mp4`, etc. The **last file** (`(N).mp4`) is the complete stitched video containing all windows. Do NOT `ffmpeg -f concat` these files -- that doubles content. Compress and deliver the last file only. Delete the partial earlier files.
+
+9. **Batch-mode shortcut: `--run` flag.** When processing multiple reels in a movie-like sequence where anchors and prompts are already validated, use the helper scripts' `--run` flag to combine config generation + GPU execution in one command. This skips the split approach (Step A + Step B) and is faster for batch processing. Only use this when you're confident in the config — for first-time or experimental posts, use the split approach for debugging.
 
 > **Stop signal:** When the user says "stop after this" or similar, complete the CURRENT reel (send the video), then stop. Do NOT auto-continue with the next reel. Wait for the user to say "continue" before starting more.
 
