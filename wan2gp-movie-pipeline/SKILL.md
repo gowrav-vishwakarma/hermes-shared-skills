@@ -305,7 +305,10 @@ Run via `terminal(background=true, notify_on_complete=true)`. The pipeline:
 3. Generates video for each scene sequentially (LTX-2.3)
 4. Compresses each video with ffmpeg
 5. Updates `progress.json` after every step (crash-safe)
-**DO NOT concat scenes together.** Each subsequent scene using `continue_from` already contains all prior content merged into one continuous timeline. The final output is always `scene_XX/scene_XX_video.mp4` (the last scene).
+
+**Concat decision logic** (CRITICAL — determines final output):
+- **ALL `continue_from` chain** (no `anchor_from_last_frame`): Each scene embeds the full prior timeline. The LAST scene is the complete movie. Do NOT concat. Output: `scene_NN/scene_NN_video.mp4`
+- **Any `anchor_from_last_frame` scene**: This generates a standalone 20s clip from the extracted frame — it does NOT extend the timeline. The final output = last `continue_from` scene + all subsequent `anchor_from_last_frame` scenes, concatenated. See pitfall #14.
 
 ### Step 5: Monitor
 
@@ -379,7 +382,8 @@ The pipeline enforces these rules automatically:
 
 12. **Concatenating sliding window or continue_from scenes (WRONG).** When a scene uses sliding window (`--video-length > --sliding-window-size`) or `continue_from` (`--video-source`), the LAST generated scene already contains ALL prior content merged into one continuous video. The movie pipeline's final `concat_movie.py` step that stitches scenes together produces garbage output for these cases — e.g., 3 scenes concatenated into a 118s file with duplicated content. **Correct workflow:** take the last scene's output file (`scene_03_video.mp4` or the last `(N).mp4` for sliding window), compress it, deliver it. Do NOT concatenate. Session evidence (2026-05-05, Earth timelapse): Scene 3 alone was the correct 59s complete video containing the full timeline from fireball to humans; the concat produced a 118s garbage file.
 
-13. **Continue-from OOM on 6th+ scene (exit code -9).** When using `continue_from` chains in movies, each subsequent scene loads the previous scene's video as source. The final output scene (scene 6 in a 6-scene movie) OOMs during second-pass denoising (`[Sliding Window X/Y] - Denoising Second Pass` then `exit code -9`) because WanGP's second-pass loads both source and target into VRAM. **Sessions 01-05 succeed, scene 06 fails.** Recovery: just re-run `run_pipeline.py` — it resumes from scene 06 since the GPU freed up after the crash. If the same scene keeps OOMing, split the movie into two batches.
+14. **ffmpeg `-sseof` silently fails on MP4 files.** When extracting the last frame for `anchor_from_last_frame`, the old ffmpeg command used `-sseof -0.04` which returns exit code 0 but produces 0 bytes of output on MP4 files. The pipeline script was patched to use ffprobe to get the video duration, then seeks to `duration - 0.5` with `-ss` and `-frames:v 1` instead. **This fix is baked into the latest `run_pipeline.py`** — any movie pipeline started with an old version may hit this bug. Symptoms: `anchor_gen` completes but no `scene_NN_anchor_lastframe.jpg` exists in the scene folder. Recovery: fix the script and re-run.
+15. **Continue-from OOM on 6th+ scene (exit code -9).** When using `continue_from` chains in movies, each subsequent scene loads the previous scene's video as source. The final output scene (scene 6 in a 6-scene movie) OOMs during second-pass denoising (`[Sliding Window X/Y] - Denoising Second Pass` then `exit code -9`) because WanGP's second-pass loads both source and target into VRAM. **Sessions 01-05 succeed, scene 06 fails.** Recovery: just re-run `run_pipeline.py` — it resumes from scene 06 since the GPU freed up after the crash. If the same scene keeps OOMing, split the movie into two batches.
 
 ## Delegation
 
