@@ -419,10 +419,22 @@ Build a complete soundscape by combining three audio layers:
 
 ---
 
+### Model Selection — Content Type Guidelines
+
+| Content Type | Recommended Model | Why |
+|---|---|---|
+| General / landscapes / nature | `gguf` | Fast, good quality for simple scenes |
+| Anime-style fights / character action | `distilled-1.1` | GGUF produces merged, unclear output for complex character scenes. Distilled-1.1 gives sharp, realistic detail. |
+| Photorealistic human faces / portraits | `distilled-1.1` | Better anatomy preservation and detail |
+| Stylized / artistic / painterly | `gguf` or `distilled-1.1` | Either works; test both |
+| Quick iteration / prompt testing | `gguf` | Fast feedback loop |
+
+**User preference (2026-05-05):** For anime fight scenes requiring sharp, realistic detail (hard to differentiate real vs generated), use `distilled-1.1` — `gguf` produces merged/unclear character visuals.
+
 ### What Works Well
 
 | Strength | Description |
-|----------|-------------|
+|---|---|
 | Cinematic compositions | Wide, medium, close-up with thoughtful lighting, shallow DoF, natural motion |
 | Emotive human moments | Single-subject expressions, subtle gestures, facial nuance |
 | Atmosphere and setting | Fog, mist, golden-hour light, rain, reflections, ambient textures |
@@ -434,7 +446,7 @@ Build a complete soundscape by combining three audio layers:
 ### What to Avoid
 
 | Avoid | Why |
-|-------|-----|
+|---|---|
 | Internal emotional states | Use physical cues, not labels like "sad" or "confused" |
 | Text and logos | Readable text is not reliable |
 | Complex chaotic physics | Jumping, juggling cause artifacts (dancing is OK) |

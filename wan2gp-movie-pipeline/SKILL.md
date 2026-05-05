@@ -241,10 +241,18 @@ Optional continuation fields (see "Video continuation" section above):
 
 Before running the pipeline, generate all assets the movie needs **locally** inside `<movie-dir>`:
 
-1. **Copy character base** (if character appears in any scene):
-   ```bash
-   cp "$CHARACTER_BASE" <movie-dir>/character_base.jpg
-   ```
+1. **Character source** (two workflows):
+   - **User-provided character** (preferred): If the user sends their own images/photos, use them directly. Copy to `<movie-dir>/character_base.jpg` and skip generation. This avoids the AI-perfect look and gives exact visual identity. The user may send multiple photos — pick the most dynamic/cinematic one as anchor, and note others for scene-specific styling.
+     ```bash
+     cp <user-provided-image-path> <movie-dir>/character_base.jpg
+     ```
+   - **Auto-generated character** (fallback): When no user image is available, generate with a realistic documentary prompt (see below).
+     ```bash
+     cp "$CHARACTER_BASE" <movie-dir>/character_base.jpg
+     ```
+   > **Pitfall: User-provided characters may have different aspect ratios.** If the user's image is not 16:9 or 9:16, regenerate it with `generate_image_config.py` using the movie's aspect ratio, OR instruct the user to crop/resize first. Mismatched aspect ratios can distort composition in anchor prompts.
+
+   > **Documentary prompt for auto-generated characters:** When generating a character from scratch, use the prompt pattern: `"A realistic [description]. Photographic realism, documentary style -- Canon EOS R5, [85mm/35mm] lens. Natural skin texture with slight pores, not airbrushed. No AI-perfect rendering, slight film grain, natural imperfections."` This counteracts Qwen's hyper-perfect aesthetic tendency. See `references/user-character-workflow.md`.
 
 2. **Generate movie-specific locations/props/creatures** into `<movie-dir>/assets/`:
    ```bash
