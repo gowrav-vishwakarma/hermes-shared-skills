@@ -379,6 +379,8 @@ The pipeline enforces these rules automatically:
 
 12. **Concatenating sliding window or continue_from scenes (WRONG).** When a scene uses sliding window (`--video-length > --sliding-window-size`) or `continue_from` (`--video-source`), the LAST generated scene already contains ALL prior content merged into one continuous video. The movie pipeline's final `concat_movie.py` step that stitches scenes together produces garbage output for these cases — e.g., 3 scenes concatenated into a 118s file with duplicated content. **Correct workflow:** take the last scene's output file (`scene_03_video.mp4` or the last `(N).mp4` for sliding window), compress it, deliver it. Do NOT concatenate. Session evidence (2026-05-05, Earth timelapse): Scene 3 alone was the correct 59s complete video containing the full timeline from fireball to humans; the concat produced a 118s garbage file.
 
+13. **Continue-from OOM on 6th+ scene (exit code -9).** When using `continue_from` chains in movies, each subsequent scene loads the previous scene's video as source. The final output scene (scene 6 in a 6-scene movie) OOMs during second-pass denoising (`[Sliding Window X/Y] - Denoising Second Pass` then `exit code -9`) because WanGP's second-pass loads both source and target into VRAM. **Sessions 01-05 succeed, scene 06 fails.** Recovery: just re-run `run_pipeline.py` — it resumes from scene 06 since the GPU freed up after the crash. If the same scene keeps OOMing, split the movie into two batches.
+
 ## Delegation
 
 - **How to make images** (assets, anchors, ref prompting) -> `wan2gp-image-generation`

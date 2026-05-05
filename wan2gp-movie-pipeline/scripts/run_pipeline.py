@@ -232,11 +232,22 @@ def detect_video(scene_dir: Path, basename: str) -> Path | None:
 
 def extract_last_frame(video_path: Path, output_path: Path) -> int:
     """Extract the last frame from a video as a JPG image."""
+    # -sseof fails for many MP4 files (exit 0 but empty output).
+    # Use ffprobe to get duration, then seek near the end with -ss.
+    dur_result = subprocess.run(
+        ["ffprobe", "-v", "error",
+         "-show_entries", "format=duration",
+         "-of", "default=noprint_wrappers=1:nokey=1",
+         str(video_path)],
+        capture_output=True, text=True
+    )
+    duration = float(dur_result.stdout.strip())
+    seek_time = max(0.0, duration - 0.5)  # 0.5s before end
     cmd = [
         "ffmpeg", "-y", "-loglevel", "error",
-        "-sseof", "-0.04",
+        "-ss", str(seek_time),
         "-i", str(video_path),
-        "-vframes", "1", "-update", "1",
+        "-frames:v", "1",
         str(output_path),
     ]
     log(f"  Extracting last frame: {video_path.name} -> {output_path.name}")
