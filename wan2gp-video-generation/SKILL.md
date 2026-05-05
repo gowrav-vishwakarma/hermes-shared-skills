@@ -10,12 +10,30 @@ Generate ~20 s videos (481 frames @ 24 fps) with native audio using **LTX-2.3 22
 
 ## Environment variables
 
-All paths come from `$PROFILE_ROOT/.env`, which is auto-sourced into agent shells. Helper scripts are strict consumers; missing keys trigger `[env] required env var ... not set`. Recovery: `set -a; source $PROFILE_ROOT/.env; set +a`.
+**CRITICAL: The `.env` file is NOT auto-sourced into agent subprocess shells.** Before running any helper script, you MUST manually source it:
+
+```bash
+set -a; source $PROFILE_ROOT/.env; set +a
+```
+
+Or in Python subprocess calls, explicitly pass the env dict after sourcing:
+```python
+env = {**os.environ}
+with open('$PROFILE_ROOT/.env') as f:
+    for line in f:
+        if '=' in line:
+            k, v = line.split('=', 1)
+            env[k.strip()] = v.strip()
+```
+
+Helper scripts are strict consumers; missing keys trigger `[env] required env var ... not set`.
+
+**NOTE on `$PROFILE_SKILLS`:** In this profile, it points to `/home/gowrav/.hermes/shared-skills` (NOT the local skills dir). Verify: `grep PROFILE_SKILLS $PROFILE_ROOT/.env`.
 
 Used by this skill:
 
 - `PROFILE_HOME` -- profile workspace
-- `PROFILE_SKILLS` -- `$PROFILE_ROOT/skills`; used in command examples
+- `PROFILE_SKILLS` -- shared skills dir (`/home/gowrav/.hermes/shared-skills` in this profile)
 - `POSTS_DIR` -- `$PROFILE_HOME/posts`
 - `WAN_APP_DIR` -- WanGP app dir (contains `wgp.py`, `env/bin/python`)
 - `WAN_PYTHON` -- `$WAN_APP_DIR/env/bin/python`

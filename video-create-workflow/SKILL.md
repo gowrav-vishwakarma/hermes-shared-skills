@@ -30,13 +30,31 @@ For **movies** (3+ connected scenes forming a story), use the `wan2gp-movie-pipe
 
 ## Environment variables
 
-All paths come from `$PROFILE_ROOT/.env`, which is auto-sourced into agent shells. Helper scripts are strict consumers and fail loudly if any required key is missing. Recovery: `set -a; source $PROFILE_ROOT/.env; set +a`.
+**CRITICAL: The `.env` file is NOT auto-sourced into agent subprocess shells.** Before running any helper script, you MUST manually source it:
+
+```bash
+set -a; source $PROFILE_ROOT/.env; set +a
+```
+
+Or in Python subprocess calls, explicitly pass the env dict after sourcing:
+```python
+env = {**os.environ}
+with open('$PROFILE_ROOT/.env') as f:
+    for line in f:
+        if '=' in line:
+            k, v = line.split('=', 1)
+            env[k.strip()] = v.strip()
+```
+
+Helper scripts are strict consumers and fail loudly if any required key is missing.
+
+**NOTE on `$PROFILE_SKILLS`:** In this profile, it points to `/home/gowrav/.hermes/shared-skills` (NOT the local skills dir). Verify: `grep PROFILE_SKILLS $PROFILE_ROOT/.env`.
 
 Used by this workflow:
 
 - `PROFILE_ROOT` -- profile directory (e.g., `$HOME/.hermes/profiles/meena`)
 - `PROFILE_HOME` -- profile workspace (`$PROFILE_ROOT/home`); also the agent's `$HOME`
-- `PROFILE_SKILLS` -- `$PROFILE_ROOT/skills` (used in command examples)
+- `PROFILE_SKILLS` -- shared skills dir (`/home/gowrav/.hermes/shared-skills` in this profile)
 - `POSTS_DIR` -- `$PROFILE_HOME/posts`
 - `MEMORY_FILE` -- `$PROFILE_ROOT/memories/MEMORY.md`
 - `JOURNEY_FILE` -- `$PROFILE_HOME/journey.jsonl`
