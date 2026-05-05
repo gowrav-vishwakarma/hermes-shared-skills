@@ -1,6 +1,6 @@
 ---
 name: wan2gp-movie-pipeline
-description: Use when the user asks for a multi-scene movie or long-form video (3+ connected scenes). Orchestrates full script writing, autonomous scene-by-scene rendering (anchor image + video + compress), GPU gating, crash recovery via progress tracking, and final concatenation. Single posts use video-create-workflow instead.
+description: Use when the user asks for a multi-scene movie or long-form video (3+ connected scenes). Orchestrates full script writing, autonomous scene-by-scene rendering (anchor image + video + compress), GPU gating, crash recovery via progress tracking. Final output is always the LAST scene's file — the `continue_from` chain and sliding window mechanisms already bundle all prior content into each subsequent scene. Single posts use video-create-workflow instead.
 version: 1.0.0
 author: Hermes
 license: MIT
@@ -12,7 +12,7 @@ metadata:
 
 # Movie Pipeline
 
-Orchestrates multi-scene movies as an autonomous background pipeline. The agent writes a full `movie_script.json` upfront (all scenes, prompts, image refs), then kicks off a Python runner that handles anchor generation, video generation, compression, and final concatenation -- scene by scene, with GPU gating and crash recovery.
+Orchestrates multi-scene movies as an autonomous background pipeline. The agent writes a full `movie_script.json` upfront (all scenes, prompts, image refs), then kicks off a Python runner that handles anchor generation, video generation, compression, and scene-by-scene processing -- with GPU gating and crash recovery. **The final output is always the LAST scene's generated video file**, because each scene using `continue_from` or sliding window already contains all prior content merged into one continuous timeline. Do NOT use `concat_movie.py` or `ffmpeg -f concat` to stitch scenes together. Single posts use `video-create-workflow` instead.
 
 ## When to use
 
@@ -23,6 +23,7 @@ Orchestrates multi-scene movies as an autonomous background pipeline. The agent 
 
 - Single reels or 1-2 independent posts -- use `video-create-workflow` instead.
 - Unrelated batch reels (e.g., "make 5 different reels") -- use the batch protocol in `video-create-workflow`.
+- User explicitly rejects WanGP/AI video generation -- use Blender (`/snap/bin/blender`) for 3D animation (see `creative:references/blender-available.md`).
 
 ## Environment variables
 
@@ -70,8 +71,8 @@ $POSTS_DIR/2026-05-04_movie_fantasy/
 │   ├── video_generation.json
 │   ├── scene_03_video.mp4
 │   └── scene_03_compressed.mp4
-├── concat_list.txt             # Generated for ffmpeg concat
-└── movie_final.mp4             # Assembled movie
+├── concat_list.txt             # Generated but NOT used for continue_from scenes (skip concat)
+└── scene_06/scene_06_video.mp4 # **FINAL OUTPUT** -- contains all scenes merged via continue_from chain
 ```
 
 Resolve the movie slug as: `YYYY-MM-DD_movie_<short_tag>` where `<short_tag>` is a 1-2 word snake_case descriptor (e.g., `fantasy`, `love_story`, `adventure`).
@@ -111,6 +112,7 @@ Best for **chaining scenes with different prompts** -- the new scene picks up fr
 - Passes the referenced scene's completed video as `--video-source` to WanGP
 - WanGP reads the last frames from the source and generates new frames that seamlessly continue
 - The scene's `video_prompt` describes what happens NEXT -- do not re-describe the source video
+- **MUST include `cut_to_in_script`** in the video_prompt to remove source video artifacts. This tells WanGP to discard visual effects, lighting, and artifacts carried over from the source video, preventing ghosting/morphing into the new scene.
 
 ```json
 {
@@ -119,10 +121,12 @@ Best for **chaining scenes with different prompts** -- the new scene picks up fr
   "continue_from": "scene_01",
   "anchor_prompt": "",
   "anchor_filename": "scene_02_anchor",
-  "video_prompt": "She continues walking along the bank, her dupatta trailing...",
+  "video_prompt": "CUT TO: She continues walking along the bank, her dupatta trailing... [rest of prompt]",
   "video_filename": "scene_02_video"
 }
 ```
+
+The `CUT TO:` at the start of the `video_prompt` is the `cut_to_in_script` mechanism -- it resets WanGP's attention to the new scene's visual context rather than trying to morph from the source video's last frames. Without it, the model blends old video effects into the new generation, causing visual artifacts and unwanted content carryover.
 
 ### Approach B: `anchor_from_last_frame` (last-frame extraction + I2V)
 
@@ -151,7 +155,7 @@ Best for **scene transitions** -- new camera angle, new composition, but startin
 | Goal | Mode | Key |
 |------|------|-----|
 | Single shot needs > 20s (same prompt, fluid motion) | Sliding window | Set `video_length > sliding_window_size` in video config |
-| Chain scenes with different prompts/action | Continue Video | `continue_from` |
+| Extend scene with different action, remove source artifacts | Continue Video | `continue_from` + `cut_to_in_script` |
 | New composition from where previous ended | Last Frame | `anchor_from_last_frame` |
 | Fresh scene, no continuity needed | Normal | Neither field |
 
@@ -189,7 +193,7 @@ Best for **scene transitions** -- new camera angle, new composition, but startin
       "continue_from": "scene_01",
       "anchor_prompt": "",
       "anchor_filename": "scene_02_anchor",
-      "video_prompt": "She continues walking deeper into the forest, the camera tracking...",
+      "video_prompt": "CUT TO: She continues walking deeper into the forest, the camera tracking...",
       "video_filename": "scene_02_video"
     },
     {
@@ -297,11 +301,11 @@ python3 "$PROFILE_SKILLS/wan2gp-movie-pipeline/scripts/run_pipeline.py" \
 
 Run via `terminal(background=true, notify_on_complete=true)`. The pipeline:
 1. Checks GPU availability before each operation
-2. Generates anchor image for each scene (Qwen Image Edit Plus)
-3. Generates video for each scene (LTX-2.3)
+2. Generates anchor image for first scene only (Qwen Image Edit Plus)
+3. Generates video for each scene sequentially (LTX-2.3)
 4. Compresses each video with ffmpeg
-5. Concatenates all scenes into `movie_final.mp4`
-6. Updates `progress.json` after every step (crash-safe)
+5. Updates `progress.json` after every step (crash-safe)
+**DO NOT concat scenes together.** Each subsequent scene using `continue_from` already contains all prior content merged into one continuous timeline. The final output is always `scene_XX/scene_XX_video.mp4` (the last scene).
 
 ### Step 5: Monitor
 
@@ -372,6 +376,8 @@ The pipeline enforces these rules automatically:
 10. **Kill stale pipelines before starting new ones.** Multiple pipelines from the same profile share the same GPU and block each other via the `wait_for_gpu()` gating. The GPU RAM usage will be low if you see no `wgp.py` process running — it likely means a pipeline is queued behind another. Always check `ps aux | grep -E "(wgp|run_pipeline)" | grep -v grep` before launching a new movie pipeline. If old pipelines are still running, kill them first unless you intentionally want to queue behind them.
 
 11. **Character anchor for scene transitions.** When generating multi-scene videos with location/scene changes, always copy the user's real photo to `<movie-dir>/character_base.jpg` and use it as `--image-start` for EVERY scene (not just the first). Do NOT rely on `continue_from` or last-frame extraction for scene transitions — WanGP's Continue Video mode will try to morph the source scene into the new scene, causing visual artifacts. Image-start with the character anchor ensures the new scene starts with the correct composition and character identity. This is the most reliable method for identity locking across scene changes.
+
+12. **Concatenating sliding window or continue_from scenes (WRONG).** When a scene uses sliding window (`--video-length > --sliding-window-size`) or `continue_from` (`--video-source`), the LAST generated scene already contains ALL prior content merged into one continuous video. The movie pipeline's final `concat_movie.py` step that stitches scenes together produces garbage output for these cases — e.g., 3 scenes concatenated into a 118s file with duplicated content. **Correct workflow:** take the last scene's output file (`scene_03_video.mp4` or the last `(N).mp4` for sliding window), compress it, deliver it. Do NOT concatenate. Session evidence (2026-05-05, Earth timelapse): Scene 3 alone was the correct 59s complete video containing the full timeline from fireball to humans; the concat produced a 118s garbage file.
 
 ## Delegation
 

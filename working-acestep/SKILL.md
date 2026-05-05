@@ -375,6 +375,17 @@ VRAM pre-flight failed: Insufficient free VRAM: need ~1.7 GB, only 0.4 GB availa
 ### First generation slow
 Models are lazy-loaded on first request. First generation takes longer (model download + init). Subsequent calls are fast.
 
+### Caption rewriting is unavoidable
+**The ACE-Step API server has a built-in text conditioning layer that rewrites every caption** before it reaches the DiT model. This happens regardless of `--no-format`, `--no-thinking`, or any other flag. The server's conditioning pipeline paraphrases natural-language captions into structured descriptions — you cannot pass a verbatim caption through to the model. This is an API-level behavior, not a wrapper bug.
+
+**Implications:**
+- Your exact prompt text will NOT appear in the generation — the server rewrites it
+- Always write captions as **comma-separated style tags** (genre, instruments, mood, tempo, key) rather than narrative prose. This format maps better to what the model actually receives anyway
+- Don't waste time trying to force exact prompt preservation — it won't work
+
+### `--no-format` optimization
+**`--no-format` disables the LM's format enhancement phase**, skipping the slow caption paraphrasing step before GPU work begins. This makes caption-based generation significantly faster than Simple mode (`-d`) since it avoids the LM inference entirely. Use `--no-format` with `-c` for fast generation with style control. Note: the server's conditioning layer still rewrites the caption at the API level — `--no-format` only speeds up the local wrapper.
+
 ## Notes
 
 - **Model requirements**: Extract, Lego, and Complete modes require the **base model** (`acestep-v15-base`). Generate, Cover, and Repaint work with the default **turbo model**. If you want ALL features from one server, configure it to load the base model — it handles everything (just uses 50 steps instead of 8, so slower). Set `--steps 50` and `--guidance 7.0` when using base/sft models.

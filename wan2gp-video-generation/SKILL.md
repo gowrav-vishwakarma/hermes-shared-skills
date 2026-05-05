@@ -612,7 +612,7 @@ The helper will report: `EXTENDED VIDEO: 2 sliding windows will be generated for
   - **Do NOT concatenate them.** The last file (`(N).mp4`) is the final stitched result.
   - The last file is always the one to compress and deliver.
 
-### Sliding window vs movie pipeline continue_from
+- **Sliding window vs movie pipeline continue_from**
 
 Two approaches exist for longer content:
 
@@ -621,7 +621,31 @@ Two approaches exist for longer content:
 | Single continuous shot > 20s (same camera, fluid motion) | Sliding window (`--video-length > --sliding-window-size`) | Extending a scene's duration seamlessly |
 | Multi-scene narrative (different prompts, locations, compositions) | Movie pipeline `continue_from` or `anchor_from_last_frame` | Chaining distinct scenes into a movie |
 
-The sliding window produces one continuous video file. The movie pipeline produces separate scene files that are concatenated.
+The sliding window produces one continuous video file. The movie pipeline uses `continue_from` chains where each subsequent scene **already contains ALL prior content merged** — the final output is always the last scene's video file, never a concatenated file. Never use `concat_movie.py` or `ffmpeg -f concat` with continue_from scenes.
+
+---
+
+## Video Delivery
+
+**CRITICAL: For multi-scene movies using `continue_from`, NEVER concatenate scenes.**
+
+When using the movie pipeline with `continue_from` chains:
+- Each subsequent scene **already contains ALL prior content** merged via WanGP's video continuation
+- The final output is always `scene_XX/scene_XX_video.mp4` (the last scene's file)
+- Do NOT run `ffmpeg -f concat` or `concat_movie.py` — this creates duplicate/overlapping garbage
+- Take the last scene's output, compress it, deliver it
+
+**Compression for delivery:**
+
+WanGP LTX-2.3 outputs videos at very high bitrate (~36,000 kb/s, 70-88MB for 20s). Telegram max is 20MB, so compression is mandatory before delivery.
+
+```bash
+ffmpeg -i <input.mp4> -vcodec libx264 -acodec aac -strict experimental \
+    -b:v 2000k -b:a 128k -movflags +faststart \
+    <output_compressed.mp4>
+```
+
+Typical results (720x1280, 20s): 54-88 MB input compresses to 3.8-4.7 MB (~91-95% reduction). Compression takes ~10-20 seconds. If original is already under 20MB, skip compression and send directly.
 
 ---
 
@@ -665,14 +689,16 @@ python3 "$PROFILE_SKILLS/wan2gp-video-generation/scripts/generate_video_config.p
 **Continue from previous video (movie pipeline):**
 ```bash
 python3 "$PROFILE_SKILLS/wan2gp-video-generation/scripts/generate_video_config.py" \
-    --prompt "She continues walking along the bank, her dupatta trailing in the wind..." \
+    --prompt "CUT TO: She continues walking along the bank, her dupatta trailing in the wind..." \
     --video-source "$POSTS_DIR/2026-05-04_movie_fantasy/scene_01/scene_01_video.mp4" \
     --output-filename scene_02_video \
     --output-dir "$POSTS_DIR/2026-05-04_movie_fantasy/scene_02" \
     --aspect 9:16 \
     --seed 742981
 ```
-Sets `image_prompt_type: "V"` (WanGP "Continue Video" mode). Mutually exclusive with `--image-start`. Optional `--keep-frames-video-source` controls how many source frames to keep (empty=all). Primarily used by `wan2gp-movie-pipeline` for `continue_from` scenes -- see that skill for full details.
+Sets `image_prompt_type: "V"` (WanGP "Continue Video" mode). Mutually exclusive with `--image-start`. 
+
+**MANDATORY: Every `--video-source` (continue_from) prompt MUST start with `CUT TO:`** — this is the `cut_to_in_script` mechanism that tells WanGP to discard visual effects, lighting, and artifacts carried over from the source video. Without it, the model will try to morph the source video's last frames into the new scene, causing ghosting and unwanted content carryover. The rest of the prompt describes what happens NEXT in the new scene. Optional `--keep-frames-video-source` controls how many source frames to keep (empty=all). Primarily used by `wan2gp-movie-pipeline` for `continue_from` scenes -- see that skill for full details.
 
 **Extended video (~30s, sliding window):**
 ```bash
@@ -785,6 +811,8 @@ When the helper prints `[generate_video_config] coherence reminder:`, verify bef
 ## Pitfalls
 
 - **Concatenating sliding window output files (WRONG).** When `video_length > sliding_window_size`, WanGP writes intermediate files during generation: `{name}.mp4` (partial, first window only), then `{name}(2).mp4`, `{name}(3).mp4`, etc. **The LAST file is the complete stitched video** — it already contains ALL windows merged. Do NOT `ffmpeg -f concat` the files together; that creates a garbage file (e.g., 50s instead of 30s with the first 20s duplicated). **Correct workflow:** find the last `(N).mp4` file, compress it, deliver it. Delete the partial earlier files. See `references/sliding-window-output-files.md`. Session evidence (2026-05-05, Meena nature reel): mistakenly concatenated `nature_reel_30s.mp4` + `nature_reel_30s(2).mp4` → 50s garbage. The `(2).mp4` alone was the correct 30s result.
+
+- **Concatenating movie scenes that use sliding window or continue_from (WRONG).** When a scene uses sliding window (`--video-length > --sliding-window-size`) or `continue_from` (`--video-source`), the LAST generated scene already contains ALL prior content merged into one continuous video. The movie pipeline's final `concat_movie.py` step that stitches scenes together is WRONG for these cases. **Correct workflow:** take the last scene's output file, compress it, deliver it. Do NOT concatenate. Session evidence (2026-05-05, Earth timelapse): 3 scenes concatenated into a 118s garbage file; Scene 3 alone was the correct 59s complete video containing the full timeline from fireball to humans. The pipeline script `concat_movie.py` was the culprit — it blindly concat-all scenes regardless of whether they were already extended.
 - **Using `--run` flag.** KILLS the job on agent turn timeout. The 5-6 minute generation never completes because the terminal call is killed. Always split into config-write + background-exec.
 - **Wrong flags.** `--image-ref` does NOT exist -- use `--image-start`. `--aspect-ratio` does NOT exist -- use `--aspect` (preferred) or `--resolution "WxH"`.
 - **Aggressive polling.** Polling the monitor script repeatedly creates message spam in Telegram. Use `notify_on_complete=true` as primary method. Only poll once as fallback, never in a loop.
@@ -832,6 +860,7 @@ When the helper prints `[generate_video_config] coherence reminder:`, verify bef
 - **`monitor_video_gen.py` etime parse bug.** The `parse_etime` function in `monitor_video_gen.py` had a bug on line 37 where `h, m = 0, int(parts[0]), int(parts[1])` tried to unpack 3 values into 2 variables, causing `ValueError: too many values to unpack`. **Fix:** changed to `h, m, s = int(parts[0]), int(parts[1]), 0`. If you encounter this error on a fresh checkout, apply the same fix. Patch applied to skill as of 2026-05-05.
 - **`$CHARACTER_ASSETS_MANIFEST` (when using `--ref-assets` in video).** The video config helper imports `asset_manifest.py`, which is now a strict consumer of `$CHARACTER_ASSETS_MANIFEST`. If the env var is missing the script exits immediately with `[env] required env var 'CHARACTER_ASSETS_MANIFEST' not set`. Source `$PROFILE_ROOT/.env` to fix.
 - **LTX-2.3 I2V cannot preserve exact visual identity during motion.** LTX-2.3 REGENERATES subjects during motion rather than animating exact anchor pixels. Even with zero LoRAs, high guidance scale (5+), simplified prompts ("same exact idols"), and explicit negative prompts ("transform, change style, different look, new style, fantasy art, cartoon, anime, different appearance, blue skin, different sculpture"), the model will reinterpret/transform subjects — especially complex subjects like religious idols, sculptures, or anything with detailed ornamentation. This is an architectural limitation, not a config issue. **Session evidence (2026-05-02, Radha-Krishna idols):** 3 full iterations attempted: (1) Fantasy_Realism LoRA at 1.0 → complete style transform. (2) No LoRA, negative prompt targeting style change, guidance 6 → STILL transformed. (3) No LoRA, negative prompt, guidance 5, ultra-simple prompt ("exact same colors, same appearance, same golden marble style") → STILL transformed, model reinterpreted the deities. All 3 failed to preserve exact appearance. **Confirmed: works for simple subjects** (single cat on sunlit floor — cat identity preserved across steps). The failure is specifically with complex ornamented subjects (religious icons, detailed sculptures, heavily costumed characters). **Workarounds:** (1) Frame interpolation between manually crafted keyframes — the exact anchor pixel is preserved because it IS a frame. (2) Use a different I2V model (e.g., Mochi) if exact preservation is critical. (3) Composite a static PNG onto a blank background animation in post. (4) Accept approximate preservation — output may still be beautiful even if not pixel-perfect. **Rule of thumb:** Simple subjects (animals, people in basic poses) → I2V works fine. Complex ornamented subjects (religious icons, detailed sculptures, heavily costumed characters) → I2V will transform them. Use alternatives for the latter.
+- **Config file path mismatch after Step A.** The `generate_video_config.py` helper writes `video_generation.json` using `$POSTS_DIR` (which resolves to `$PROFILE_HOME/posts`). If you construct the path manually in your Step B command (e.g., hardcoding or deriving from `$PROFILE_SKILLS`), it may not match the actual location. **Always verify the config exists** after Step A: `ls "$POSTS_DIR/2026-05-05_2/video_generation.json"` — if it does not exist, echo `$POSTS_DIR` to see the actual resolved path. **Session evidence (2026-05-05):** First wgp.py run failed with `[ERROR] File not found: /home/gowrav/.hermes/profiles/gvs/posts/...` because `$POSTS_DIR` resolved to `/home/gowrav/.hermes/profiles/gvs/home/posts/` (with a `home` subdirectory). Had to re-run Step B with the correct `$POSTS_DIR`. **Fix:** Always use `"$POSTS_DIR/..."` (unquoted var expansion) in both Step A and Step B, never hardcode or recompute the path.
 - **Orphaned wgp.py can deadlock GPU → system hang.** When a Hermes session ends mid-execution (timeout, Telegram disconnect, agent crash), background `wgp.py` GPU processes are left orphaned. These processes can enter a hung/deadlocked state in the NVIDIA driver (`D` state / uninterruptible sleep). Processes in `D` state CANNOT be killed with `kill -9`. When the GPU driver is stuck, the entire system becomes unresponsive — no new terminal sessions, no SSH, no Ctrl-Alt-F1. The ONLY recovery is a hard reboot. **Prevention:** (1) Always check for orphans BEFORE starting a new job: `ps aux | grep "wgp.py" | grep -v grep`. (2) If orphaned wgp.py is found, try `kill -15 <pid>` first (graceful), wait 5s, then `kill -9 <pid>`. If `kill -9` does nothing or returns "Cannot send process signal", the process is in D state and the GPU is already deadlocked. (3) After killing orphans, run `nvidia-smi` — if it hangs/fails, the GPU driver is deadlocked and a reboot is required. **Recovery when GPU is deadlocked:** Hard reboot is the only option. After reboot, check `journalctl -b -1` — if logs end abruptly with no shutdown sequence, this confirms a hard crash from GPU deadlock. See `references/orphan-process-hang.md` for the May 3 crash case study. **Session evidence (2026-05-03):** Fantasy reel batch generation session ended at 01:50 AM. Orphaned wgp.py from mid-execution batch 2 deadlocked GPU. System had zero logs between May 3 01:50 and May 4 10:08 — the journal never flushed because the crash was immediate hardware-level. `dmesg` empty, no OOM killer, no kernel panic. Confirmed: force-reboot resolved it.
 
 ## Ablation Study Workflow

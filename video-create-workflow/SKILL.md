@@ -14,7 +14,9 @@ metadata:
 
 Orchestrates a single video per post: one anchor image + one ~20 s video, stored under `$POSTS_DIR/<YYYY-MM-DD_#>/`. Supports **9:16** (portrait / Instagram reels) and **16:9** (landscape / YouTube / cinematic).
 
-## Movie mode (multi-scene long-form)
+> **3D alternative:** If the user rejects AI video (WanGP) and wants 3D animation instead, use Blender (`/snap/bin/blender`) -- see `creative:references/blender-available.md`.
+
+Image craft in wan2gp-image-generation; video craft in wan2gp-video-generation; persona in SOUL.md.
 
 For **movies** (3+ connected scenes forming a story), use the `wan2gp-movie-pipeline` skill instead of this workflow. **Important:** The asset library (`assets.json`, `$CHARACTER_ASSETS_DIR`) belongs to this per-post journey workflow only -- movies do NOT use the manifest or shared assets. Movies are self-contained and manage their own local images inside the movie folder. Movies use a different pattern:
 
@@ -121,26 +123,14 @@ When the user asks for multiple reels (e.g., "make 5 reels — fun, dance, seduc
 2. **Send the completed video IMMEDIATELY** after each reel finishes. Do NOT wait to batch-send at the end. Send each one individually as it completes, then start the next reel.
 3. **Never generate multiple background gens at once** — sequential only (24 GB VRAM).
 4. **Avoid crowd scenes / multiple characters in I2V.** LTX-2.3 struggles with more than 1-2 people — the model produces artifacts. Keep reels to a single character whenever possible.
-6. **Config-first, GPU-second pipeline.** When generating multiple reels, write ALL video generation configs first (Step A for each, ~2s per config), THEN start the first GPU job. This keeps GPU idle time to near zero — you never wait 2s for a config while the GPU sits.
-
+5. **Config-first, GPU-second pipeline.** When generating multiple reels, write ALL video generation configs first (Step A for each, ~2s per config), THEN start the first GPU job. This keeps GPU idle time to near zero — you never wait 2s for a config while the GPU sits.
+6. **Temporary asset handling.** When the user explicitly says "do not save any asset" or "it's a temp creation", skip `generate_asset.py --run` entirely. Instead, generate the asset image directly with `generate_image_config.py --run` in the post folder (not assets/). This creates a one-off image for that post only.
 7. **Compression is mandatory.** After each GPU job completes, compress the raw output (~30-40MB for 20s video) to ~3-5MB before sending to Telegram:
    ```bash
    ffmpeg -i input.mp4 -vcodec libx264 -acodec aac -b:v 2000k -b:a 128k -movflags +faststart output_compressed.mp4
    ```
-   The compressed file follows the pattern `<name>_compressed.mp4` and sits next to the raw video. Compression takes ~10-20s. Skip if the raw file is already under 20MB.
-
-8. **Batch-mode shortcut: `--run` flag.** When processing multiple reels in a batch/series (e.g., a "fantasy movie" with 3-5 sequential posts) and all anchors/prompts are already validated, you can use the helper scripts' `--run` flag to combine config + GPU in one call. This skips the split Step A + Step B. **Only safe when:** (a) triggered from a Python subprocess in a single script execution (not from Telegram where agent turn timeout kills it), and (b) you're confident the config is correct. For first-time or experimental posts, always use the split approach.
-6. **Temporary asset handling.** When the user explicitly says "do not save any asset" or "it's a temp creation", skip `generate_asset.py --run` entirely. Instead, generate the asset image directly with `generate_image_config.py --run` in the post folder (not assets/). This creates a one-off image for that post only.
-
-7. **Compress after each GPU completes.** Raw WanGP output is ~30-40MB per 20s video. Before sending to Telegram, compress with ffmpeg:
-   ```bash
-   ffmpeg -i input.mp4 -vcodec libx264 -acodec aac -b:v 2000k -b:a 128k -movflags +faststart output_compressed.mp4
-   ```
    Target: ~3-5MB per video. Compressed files follow the pattern `<name>_compressed.mp4` and sit next to the raw video. Compression takes ~10-20s. Skip compression if the raw file is already under 20MB.
-
 8. **Extended video (sliding window) output: do NOT concatenate.** When `video_length > 481` (sliding window mode), WanGP writes multiple intermediate files: `{name}.mp4` (partial first window), `{name}(2).mp4`, etc. The **last file** (`(N).mp4`) is the complete stitched video containing all windows. Do NOT `ffmpeg -f concat` these files -- that doubles content. Compress and deliver the last file only. Delete the partial earlier files.
-
-9. **Batch-mode shortcut: `--run` flag.** When processing multiple reels in a movie-like sequence where anchors and prompts are already validated, use the helper scripts' `--run` flag to combine config generation + GPU execution in one command. This skips the split approach (Step A + Step B) and is faster for batch processing. Only use this when you're confident in the config — for first-time or experimental posts, use the split approach for debugging.
 
 > **Stop signal:** When the user says "stop after this" or similar, complete the CURRENT reel (send the video), then stop. Do NOT auto-continue with the next reel. Wait for the user to say "continue" before starting more.
 
@@ -248,7 +238,9 @@ The anchor image IS frame 0 of the reel. LTX-2.3 I2V decodes from it and continu
 
 1. **Anchor prompt = STATIC only.** Describe what the image should show: character, outfit, location, lighting, composition. This is the ONLY place where detailed visual description belongs.
 2. **Video prompt = DYNAMIC only.** Single opening tableau sentence matching the anchor composition (INT/EXT, pose, light). Then PURELY motion, camera, dialogue, audio. NO character appearance re-description. NO location detail re-description.
-3. **No hard cuts in I2V** -- never write `CUT TO`, `JUMP CUT`, `MEANWHILE`. Evolve the frame with camera moves (dolly, pan, tilt, push-in, pull-back).
+3. **No hard cuts in I2V** -- never write `CUT TO`, `JUMP CUT`, `MEANWHILE` in per-post reels. Evolve the frame with camera moves (dolly, pan, tilt, push-in, pull-back).
+
+> **Important distinction:** This rule applies ONLY to per-post I2V reels (the `--image-start` workflow managed by this skill). The `CUT TO:` prefix is **MANDATORY** in the **movie pipeline** (`wan2gp-movie-pipeline`) when using `continue_from` / `--video-source`, because that's a DIFFERENT mechanism (WanGP "Continue Video" mode, not I2V). The movie pipeline is designed for multi-scene narratives where each scene needs a hard reset. Per-post I2V is designed for a single continuous shot that evolves from the anchor frame. **Never use CUT TO: in per-post I2V. Always use CUT TO: in movie continue_from scenes.**
 
 **Anchor prompt (WHAT the image shows) vs Video prompt (HOW it moves):**
 
