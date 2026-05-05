@@ -361,6 +361,8 @@ The pipeline enforces these rules automatically:
 
 10. **Kill stale pipelines before starting new ones.** Multiple pipelines from the same profile share the same GPU and block each other via the `wait_for_gpu()` gating. The GPU RAM usage will be low if you see no `wgp.py` process running — it likely means a pipeline is queued behind another. Always check `ps aux | grep -E "(wgp|run_pipeline)" | grep -v grep` before launching a new movie pipeline. If old pipelines are still running, kill them first unless you intentionally want to queue behind them.
 
+11. **Character anchor for scene transitions.** When generating multi-scene videos with location/scene changes, always copy the user's real photo to `<movie-dir>/character_base.jpg` and use it as `--image-start` for EVERY scene (not just the first). Do NOT rely on `continue_from` or last-frame extraction for scene transitions — WanGP's Continue Video mode will try to morph the source scene into the new scene, causing visual artifacts. Image-start with the character anchor ensures the new scene starts with the correct composition and character identity. This is the most reliable method for identity locking across scene changes.
+
 ## Delegation
 
 - **How to make images** (assets, anchors, ref prompting) -> `wan2gp-image-generation`

@@ -151,9 +151,11 @@ Override with `--model-serialization tensorflow` on CLI, or use `Model(path)` in
 ## Pitfalls & Tips
 
 1. **Multi-instrument audio**: Basic Pitch works best on a single instrument. For full mixes, results may be messy — consider stem separation first.
-2. **Always use `uv run`**: Never call `basic-pitch` directly or activate the venv. Always prefix with `uv run` and set `working_directory` to `/home/gowrav/.hermes/shared-skills/basic-pitch/`.
-3. **Python version**: This project is pinned to Python 3.11. Do not change the Python version — TensorFlow 2.15 requires Python <=3.11.
-4. **setuptools**: Pinned to <75 because `resampy` depends on `pkg_resources` which was removed in setuptools 82+.
-5. **GPU**: Works on CPU. GPU warnings about CUDA/TensorRT are harmless and can be ignored.
-6. **Disk space**: Long audio files may need significant temporary disk space for processing.
-7. **Output naming**: Output MIDI files are named `<input_filename>_basic_pitch.mid` by default.
+2. **Always use `uv run` with `working_directory`**: Never call `basic-pitch` directly or activate the venv. Always use `uv run` with `working_directory` set to `/home/gowrav/.hermes/shared-skills/basic-pitch/`. It will not work from any other path.
+3. **Output directory MUST exist first**: The CLI throws `ValueError: 🚨 /output/dir is not a directory` if the output path doesn't already exist as a directory. Always `mkdir -p <output_dir>` before invoking `uv run basic-pitch`.
+4. **Python version**: This project is pinned to Python 3.11. Do not change the Python version — TensorFlow 2.15 requires Python <=3.11.
+5. **setuptools**: Pinned to <75 because `resampy` depends on `pkg_resources` which was removed in setuptools 82+.
+6. **GPU warnings are cosmetic**: CUDA/TensorRT/oneDNN errors on CPU-only machines can be safely ignored.
+7. **Disk space**: Long audio files may need significant temporary disk space for processing.
+8. **Output naming**: Output MIDI files are named `<input_filename>_basic_pitch.mid` by default.
+9. **Model loading is slow**: TensorFlow import can take several seconds on every call. For batch work, use `predict_and_save()` or loop-based `Model()` to avoid reloading the model each time.
