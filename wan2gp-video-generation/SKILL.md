@@ -530,6 +530,14 @@ Typical results (720x1280, 20s): 54-88 MB input compresses to 3.8-4.7 MB (~91-95
 
 ## Helper invocation -- split into two steps
 
+> ### ⚠ CRITICAL: Use `--process`, NEVER `--settings`
+> 
+> **`--settings` loads the Gradio web UI on port 7860 — it does NOT trigger generation.** The process sits idle, consuming 1-2 GB VRAM with 0% GPU compute. This is the #1 cause of silent wasted time: the terminal returns quickly, the agent thinks it started, but nothing is actually generating.
+> 
+> **Always verify actual generation is happening:** check `nvidia-smi` for GPU compute >10% and `ps aux | grep wgp.py` for the Python process. If GPU is idle after startup, you used `--settings` — kill it and restart with `--process`.
+> 
+> To actually generate, you MUST use `--process <path_to_video_generation.json>` (singular `--process`, NOT `--settings`).
+
 **ALWAYS split into Step A (config write) + Step B (background execution).** Never use `--run` from Telegram or any context where agent turn timeout matters. The GPU process runs independently on the VM and survives agent timeout.
 
 ### Step A: Write config (takes ~2s, zero timeout risk)
@@ -557,6 +565,18 @@ python3 "$PROFILE_SKILLS/wan2gp-video-generation/scripts/generate_video_config.p
     --seed 742981
 ```
 
+**Continue from previous video (movie pipeline):**
+```bash
+python3 "$PROFILE_SKILLS/wan2gp-video-generation/scripts/generate_video_config.py" \
+    --prompt "She continues walking along the bank, her dupatta trailing in the wind..." \
+    --video-source "$POSTS_DIR/2026-05-04_movie_fantasy/scene_01/scene_01_video.mp4" \
+    --output-filename scene_02_video \
+    --output-dir "$POSTS_DIR/2026-05-04_movie_fantasy/scene_02" \
+    --aspect 9:16 \
+    --seed 742981
+```
+Sets `image_prompt_type: "V"` (WanGP "Continue Video" mode). Mutually exclusive with `--image-start`. Optional `--keep-frames-video-source` controls how many source frames to keep (empty=all). Primarily used by `wan2gp-movie-pipeline` for `continue_from` scenes -- see that skill for full details.
+
 ### Step B: Start background execution (survives agent timeout)
 
 ```bash
@@ -566,6 +586,8 @@ python3 "$PROFILE_SKILLS/wan2gp-video-generation/scripts/generate_video_config.p
     --compile --attention sage2 --profile 4 --fp16
 ```
 **CRITICAL:** Run this via `terminal(background=true)` with `notify_on_complete=true`. This starts a separate VM process that survives agent turn timeout.
+
+**CRITICAL: `--settings` does NOT trigger generation.** Passing `--settings /path/to/dir` loads the Gradio web UI on port 7860 — it is a web frontend, NOT a CLI execution flag. The process sits idle waiting for a web request. To actually generate, you MUST use `--process <path_to_video_generation.json>` (note: singular `--process`, not `--settings`). See [`references/wan-settings-vs-process-flag.md`](references/wan-settings-vs-process-flag.md) for the full breakdown.
 
 ### Step C: Pre-flight -- Check no other wgp.py is running
 
@@ -592,8 +614,8 @@ The helper supports two LTX-2.3 checkpoints via `--model <alias>`:
 
 | Alias | Checkpoint | Steps | Speed | When to use |
 |---|---|---|---|---|
-| `gguf` (default) | Q6_K GGUF (16 GB) | 8 | Fastest | Day-to-day iteration, quick previews |
-| `distilled-1.1` | Distilled v1.1 int8 (19 GB) | 8 | Fast | Need WanGP auto-HDR/outpaint/union-control LoRAs |
+| `gguf`  | Q6_K GGUF (16 GB) | 8 | Fastest | Day-to-day iteration, quick previews |
+| `distilled-1.1` (default) | Distilled v1.1 int8 (19 GB) | 8 | Fast | Need WanGP auto-HDR/outpaint/union-control LoRAs |
 
 > **Benchmark data (RTX 4090, 720x1280, 20s video):**
 > - `gguf` (8 steps): ~3-4 min total, no compilation needed (gguf runtime is C++, already compiled)
@@ -605,11 +627,11 @@ The helper supports two LTX-2.3 checkpoints via `--model <alias>`:
 
 **Usage:**
 ```bash
-# Default (gguf) -- no flag needed:
+# Default (distilled-1.1) -- no flag needed:
 python3 .../generate_video_config.py --prompt "..." --output-filename foo --output-dir /tmp
 
-# Distilled 1.1:
-python3 .../generate_video_config.py --model distilled-1.1 --prompt "..." --output-filename foo --output-dir /tmp
+# GGUF (faster, no compile):
+python3 .../generate_video_config.py --model gguf --prompt "..." --output-filename foo --output-dir /tmp
 ```
 
 The `--model` flag sets `model_filename`, `model_type`, and `num_inference_steps`. Explicit `--steps` and `--guidance-scale` override the model defaults. See [`references/model_configs.md`](references/model_configs.md) for full details on each variant.
@@ -682,6 +704,8 @@ When the helper prints `[generate_video_config] coherence reminder:`, verify bef
   find <script-dir> -name "__pycache__" -type d -exec rm -rf {} +
   ```
   Then retry. This resolved `generate_video_config.py` failing with `NameError: name 'os' is not defined` despite having `import os` in the source.
+- **`monitor_video_gen.py` parse_etime crash (FIXED in session 2026-05-05).** The `parse_etime()` function crashed with `ValueError: too many values to unpack` when the process uptime was in `HH:MM` format (2-part time instead of `HH:MM:SS`). The buggy line was `h, m = 0, int(parts[0]), int(parts[1])` trying to unpack 3 values into 2. Fixed to `h, m, s = int(parts[0]), int(parts[1]), 0`. The fix is already applied to the script file, but this was discovered when the monitor script threw a Python exception during a running job. If you ever modify this script or use a version from before May 5, 2026, watch for this crash.
+
 - **TorchInductor silent compilation on first run (distilled-1.1 model).** The distilled-1.1 model triggers PyTorch TorchInductor kernel compilation before GPU inference begins. This is CPU-bound with 32 worker processes, produces NO stderr/stdout output for 5-15 minutes, and leaves the GPU idle (only ~400MB memory, 0% compute). **Do not kill the process** — it is working. **Diagnose:** `ps aux | grep compile_worker` — if you see many `torch._inductor.compile_worker` child processes, the parent is compiling kernels. **Mitigation:** Set `TORCHINDUCTOR_FORCE_DISABLE=1` env var to skip compilation (faster start but slower per-step inference). After first run, compiled kernels are cached in `~/.cache/torch_inductor/` so subsequent runs skip this phase entirely.
 
 - **`monitor_video_gen.py` etime parse bug.** The `parse_etime` function in `monitor_video_gen.py` had a bug on line 37 where `h, m = 0, int(parts[0]), int(parts[1])` tried to unpack 3 values into 2 variables, causing `ValueError: too many values to unpack`. **Fix:** changed to `h, m, s = int(parts[0]), int(parts[1]), 0`. If you encounter this error on a fresh checkout, apply the same fix. Patch applied to skill as of 2026-05-05.

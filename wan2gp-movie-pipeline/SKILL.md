@@ -59,8 +59,17 @@ $POSTS_DIR/2026-05-04_movie_fantasy/
 │   ├── video_generation.json   # Video config (written by pipeline)
 │   ├── scene_01_video.mp4      # Raw video (~30-40MB)
 │   └── scene_01_compressed.mp4 # Compressed (~3-5MB)
-├── scene_02/
-│   └── ...
+├── scene_02/                   # continue_from=scene_01 (no anchor gen)
+│   ├── video_generation.json   # Config with video_source pointing to scene_01
+│   ├── scene_02_video.mp4
+│   └── scene_02_compressed.mp4
+├── scene_03/                   # anchor_from_last_frame=scene_02
+│   ├── scene_03_anchor_lastframe.jpg  # Extracted last frame from scene_02
+│   ├── image_generation.json
+│   ├── scene_03_anchor.jpg
+│   ├── video_generation.json
+│   ├── scene_03_video.mp4
+│   └── scene_03_compressed.mp4
 ├── concat_list.txt             # Generated for ffmpeg concat
 └── movie_final.mp4             # Assembled movie
 ```
@@ -81,6 +90,69 @@ Movies are **self-contained entities**. They do NOT use the shared character ass
 
 **Why this separation exists:** The asset manifest tracks a character's evolving visual identity across a journey of posts -- outfit variants, recurring locations, vehicles. Movies are standalone creative pieces with their own art direction. Mixing them pollutes the journey manifest with one-off movie props and makes asset cleanup painful.
 
+## Video continuation (extended scenes)
+
+Movies often need scenes longer than a single 20-second generation, or need visual continuity when transitioning between scenes. Two continuation modes are available:
+
+### Approach A: `continue_from` (WanGP native Continue Video)
+
+Best for **extending a shot** -- same camera angle, smooth motion continuation, adding more duration to an existing scene.
+
+- Skips anchor generation entirely (no `anchor_prompt` or `image_refs` needed)
+- Passes the referenced scene's completed video as `--video-source` to WanGP
+- WanGP reads the last frames from the source and generates new frames that seamlessly continue
+- The scene's `video_prompt` describes what happens NEXT -- do not re-describe the source video
+
+```json
+{
+  "id": "scene_02",
+  "title": "Forest Walk Extended",
+  "continue_from": "scene_01",
+  "anchor_prompt": "",
+  "anchor_filename": "scene_02_anchor",
+  "video_prompt": "She continues walking along the bank, her dupatta trailing...",
+  "video_filename": "scene_02_video"
+}
+```
+
+### Approach B: `anchor_from_last_frame` (last-frame extraction + I2V)
+
+Best for **scene transitions** -- new camera angle, new composition, but starting from the visual state where the previous scene ended.
+
+- Extracts the last frame of the referenced scene's video via ffmpeg
+- Prepends that frame to the scene's `image_refs` as the first ref (existing refs shift by +1)
+- Runs normal anchor generation and I2V video generation
+- `anchor_prompt` must describe the extracted frame plus any other refs
+
+```json
+{
+  "id": "scene_03",
+  "title": "Sitting by River",
+  "anchor_from_last_frame": "scene_02",
+  "image_refs": ["character_base.jpg"],
+  "anchor_prompt": "Cinematic close-up, 9:16. The character (image 1, from end of walk) now seated...",
+  "anchor_filename": "scene_03_anchor",
+  "video_prompt": "The camera slowly orbits as she settles by the water...",
+  "video_filename": "scene_03_video"
+}
+```
+
+### When to use which
+
+| Goal | Mode | Key |
+|------|------|-----|
+| Extend a shot (more duration, same camera) | Continue Video | `continue_from` |
+| New composition from where previous ended | Last Frame | `anchor_from_last_frame` |
+| Fresh scene, no continuity needed | Normal | Neither field |
+
+### Constraints
+
+- **Mutual exclusivity**: a scene cannot have both `continue_from` and `anchor_from_last_frame`.
+- **Ordering**: the referenced scene must appear **before** the current scene in the `scenes` array.
+- **`continue_from` skips anchor gen**: `anchor_prompt` and `image_refs` are ignored (but `anchor_filename` is still required for folder structure).
+- **`anchor_from_last_frame` shifts refs**: the extracted frame becomes image 1 in the prompt. Adjust your `anchor_prompt` image-index references accordingly -- existing `image_refs` shift up by one position.
+- `init_movie.py` validates all of these constraints.
+
 ## movie_script.json schema
 
 ```json
@@ -90,7 +162,7 @@ Movies are **self-contained entities**. They do NOT use the shared character ass
   "created": "2026-05-04",
   "synopsis": "One-paragraph summary of the story arc",
   "seed": 742981,
-  "model": "gguf",
+  "model": "distilled-1.1",
   "scenes": [
     {
       "id": "scene_01",
@@ -100,16 +172,39 @@ Movies are **self-contained entities**. They do NOT use the shared character ass
       "anchor_filename": "scene_01_anchor",
       "video_prompt": "INT. ENCHANTED FOREST -- TWILIGHT. Camera pushes in as...",
       "video_filename": "scene_01_video"
+    },
+    {
+      "id": "scene_02",
+      "title": "Portal Discovery Extended",
+      "continue_from": "scene_01",
+      "anchor_prompt": "",
+      "anchor_filename": "scene_02_anchor",
+      "video_prompt": "She continues walking deeper into the forest, the camera tracking...",
+      "video_filename": "scene_02_video"
+    },
+    {
+      "id": "scene_03",
+      "title": "New Angle on Forest",
+      "anchor_from_last_frame": "scene_02",
+      "image_refs": ["character_base.jpg"],
+      "anchor_prompt": "Cinematic wide shot, 9:16. The character (image 1, from walk end) now seen from behind...",
+      "anchor_filename": "scene_03_anchor",
+      "video_prompt": "EXT. FOREST -- DAY. Camera tracks from behind as...",
+      "video_filename": "scene_03_video"
     }
   ]
 }
 ```
 
+- `scene_01`: Fresh anchor + video (normal flow)
+- `scene_02`: Continues scene_01's video seamlessly (no anchor needed, same shot extended)
+- `scene_03`: Extracts last frame of scene_02, uses as anchor for a new composition (new angle)
+
 **`image_refs`**: List of image paths **relative to `<movie-dir>`**. These are passed as `--image-refs` (absolute paths resolved by the pipeline) to `generate_image_config.py`. Max 3 refs (Qwen cap). Use `"character_base.jpg"` for identity locking. Order must match the prompt's image-index references (image 1, image 2, etc.).
 
 **Seed rule**: The top-level `seed` applies to ALL scenes uniformly. Scenes do NOT have individual seed overrides. This ensures visual consistency across the entire movie.
 
-**Model rule**: The top-level `model` (default: `gguf`) applies to all video generation. Options: `gguf` (fastest, ~3 min, use for quick iterations), `distilled-1.1` (auto-LoRAs, fast, ~3-4 min).
+**Model rule**: The top-level `model` (default: `distilled-1.1`) applies to all video generation. Options: `distilled-1.1` (auto-LoRAs, fast, ~3-4 min), `gguf` (fastest C++ runtime, ~3 min, no compile needed).
 
 **Prompt rules**: Anchor prompts and video prompts follow the same rules as single posts:
 - Anchor prompt = WHAT the image shows (static, detailed visual description)
@@ -137,6 +232,10 @@ Write the complete `movie_script.json` with ALL scenes, prompts, and image refer
 - `anchor_filename`: basename without extension (e.g., `scene_01_anchor`)
 - `video_prompt`: full LTX-2.3 director-style prompt
 - `video_filename`: basename without extension (e.g., `scene_01_video`)
+
+Optional continuation fields (see "Video continuation" section above):
+- `continue_from`: scene ID to continue from (WanGP native continue -- skips anchor gen)
+- `anchor_from_last_frame`: scene ID whose last frame becomes the anchor (extracts frame + I2V)
 
 ### Step 2b: Bootstrap movie assets
 
@@ -235,7 +334,7 @@ The pipeline enforces these rules automatically:
 
 3. **Anchor-video coherence.** Each scene's video prompt must match its anchor composition. The pipeline does NOT validate prompt coherence -- the agent must ensure this when writing the script.
 
-4. **Long runtime.** A 5-scene movie takes ~30-40 minutes (gguf model). A 10-scene movie takes ~60-80 minutes. Use `movie_status.py` to check progress, not aggressive polling.
+4. **Long runtime.** A 5-scene movie takes ~30-40 minutes (distilled-1.1 model). A 10-scene movie takes ~60-80 minutes. Use `movie_status.py` to check progress, not aggressive polling.
 
 5. **Orphaned processes after crash.** If the system crashed mid-generation, check for orphaned wgp.py before re-running: `ps aux | grep wgp.py | grep -v grep`. Kill any orphans first.
 
@@ -250,7 +349,9 @@ The pipeline enforces these rules automatically:
 
 8. **Never manually edit progress.json.** The pipeline writes to `progress.json` itself via `atomic_write_json()` at every step (anchor_gen done, video_gen running, compress done, scene completed, etc.). This is the pipeline's sole responsibility for crash-recovery. Manually editing it is unnecessary interference and can corrupt state. If the pipeline seems stuck, check for orphans or GPU issues — not `progress.json`.
 
-9. **Kill stale pipelines before starting new ones.** Multiple pipelines from the same profile share the same GPU and block each other via the `wait_for_gpu()` gating. The GPU RAM usage will be low if you see no `wgp.py` process running — it likely means a pipeline is queued behind another. Always check `ps aux | grep -E "(wgp|run_pipeline)" | grep -v grep` before launching a new movie pipeline. If old pipelines are still running, kill them first unless you intentionally want to queue behind them.
+9. **Scene ordering for continuation.** `continue_from` and `anchor_from_last_frame` reference other scenes by ID. The referenced scene MUST appear earlier in the `scenes` array and MUST have completed video generation before the referencing scene runs. `init_movie.py` validates ordering at initialization, but if you add scenes to an existing script, verify the order manually.
+
+10. **Kill stale pipelines before starting new ones.** Multiple pipelines from the same profile share the same GPU and block each other via the `wait_for_gpu()` gating. The GPU RAM usage will be low if you see no `wgp.py` process running — it likely means a pipeline is queued behind another. Always check `ps aux | grep -E "(wgp|run_pipeline)" | grep -v grep` before launching a new movie pipeline. If old pipelines are still running, kill them first unless you intentionally want to queue behind them.
 
 ## Delegation
 

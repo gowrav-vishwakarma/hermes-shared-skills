@@ -4,12 +4,12 @@
   "created": "YYYY-MM-DD",
   "synopsis": "One-paragraph summary of the full story arc -- what happens, emotional journey, resolution.",
   "seed": 742981,
-  "model": "gguf",
+  "model": "distilled-1.1",
   "scenes": [
     {
       "id": "scene_01",
       "title": "Scene Title",
-      "ref_assets": ["character_slug", "location_slug"],
+      "image_refs": ["character_base.jpg", "assets/location_slug.jpg"],
       "anchor_prompt": "Cinematic medium shot, 9:16. [Character description] in [location]. [Outfit, pose, lighting, composition details]. [Style notes].",
       "anchor_filename": "scene_01_anchor",
       "video_prompt": "INT/EXT. LOCATION -- TIME. [Opening tableau matching anchor]. [Camera movement]. '[Dialogue line 1]' [Acting beat]. '[Dialogue line 2]' [Physical cue]. Audio: [ambient sounds, music, voice description].",
@@ -17,12 +17,22 @@
     },
     {
       "id": "scene_02",
-      "title": "Scene Title",
-      "ref_assets": ["character_slug", "location_slug"],
-      "anchor_prompt": "Cinematic medium shot, 9:16. ...",
+      "title": "Scene Title (continued)",
+      "continue_from": "scene_01",
+      "anchor_prompt": "",
       "anchor_filename": "scene_02_anchor",
-      "video_prompt": "INT/EXT. LOCATION -- TIME. ...",
+      "video_prompt": "Camera continues as [next action]. Audio: [ambient sounds].",
       "video_filename": "scene_02_video"
+    },
+    {
+      "id": "scene_03",
+      "title": "Scene Title (new angle)",
+      "anchor_from_last_frame": "scene_02",
+      "image_refs": ["character_base.jpg"],
+      "anchor_prompt": "Cinematic wide shot, 9:16. The character (image 1, from end of previous scene) now [new composition].",
+      "anchor_filename": "scene_03_anchor",
+      "video_prompt": "INT/EXT. LOCATION -- TIME. [New composition action]. Audio: [ambient sounds].",
+      "video_filename": "scene_03_video"
     }
   ]
 }

@@ -235,6 +235,20 @@ bash "$SKILL_DIR/scripts/acestep-hermes.sh" generate \
 
 Reference audio controls timbre texture, mixing style, performance style, and overall atmosphere. It does NOT control melody or structure — use Cover for that.
 
+## Model Selection — Quality Pitfall
+
+**`turbo` model can introduce pitch shifts and artifacts** — especially noticeable on clean/orchestral material. If the user complains about pitch issues, wavering, or "unprofessional" audio, switch to `sft` model: `--steps 50 --guidance 7`. This takes ~6x longer but produces clean, precise audio.
+
+| Model | Steps | Quality | Use When |
+|-------|-------|---------|----------|
+| turbo (default) | 8 | Fast but can have pitch artifacts | Quick exploration, rough demos |
+| sft | 50 | **Clean, precise, no pitch shifts** | User-facing delivery, cinematic/orchestral, anything needing precision |
+| base | 50 | Clean | Extract/Lego/Complete tasks |
+
+When in doubt for final delivery: use `--steps 50 --guidance 7` (sft mode).
+
+**VRAM PITFALL — sft model + batch > 1 fails:** The sft model (50 steps) loads ~22.5GB on a 24GB GPU, leaving only ~0.4GB free. **Always use `--batch 1` with sft model.** Attempting `--batch 2` with sft will fail with "Insufficient free VRAM" error. If you need multiple variations with sft, generate them sequentially (separate calls) rather than in batch.
+
 ## Model Selection
 
 ACE-Step has two "brains": an **LM** (planner) and a **DiT** (executor). Choose based on your needs:
@@ -314,6 +328,12 @@ The JSON result contains the actual caption, lyrics, BPM, key, duration, seed va
 ### Terminal shows "command not found" for brackets/exclamation marks
 When lyrics contain `[`, `]`, `!`, or `—`, bash may interpret them and print confusing error lines like `[Pre-Chorus]: command not found` or `Command 'Main' not found`. These are DISPLAY ERRORS from bash parsing the lyrics in the terminal — **the generation itself still succeeds**. Do not be alarmed. If you encounter these, check the output files to confirm success.
 
+### Pitch shifts / audio artifacts
+The `turbo` model (8 steps) can produce noticeable pitch shifts or wavering in generated audio. If the output has pitch drift:
+- Use the **sft model** instead: `--steps 50 --guidance 7.0`
+- Or use the **base model**: `--steps 50`
+- Both are slower but produce clean, precise audio with no pitch artifacts.
+
 ### Exit code 5 / `uv` not found
 Hermes sets `$HOME` to the profile home, so `uv` may not be on PATH. Fix by prepending the real path:
 ```bash
@@ -323,6 +343,21 @@ export PATH="$(getent passwd $(whoami) | cut -d: -f6)/.local/bin:$PATH"
 bash "$SKILL_DIR/scripts/acestep-hermes.sh" generate ...
 ```
 
+### `$PROFILE_SKILLS` expands to wrong path from Python/code
+Hermes sets `$HOME` to the profile home, so shell expansion of `~` or `$PROFILE_SKILLS` can produce **double-nested** paths like `/home/user/.hermes/profiles/vaastu/home/.hermes/shared-skills/...` instead of the real path. This happens when running commands from Python subprocess.
+
+**Fix: use the hard-coded absolute path and run from a neutral directory:**
+```bash
+# WRONG — may resolve to /home/user/.hermes/profiles/vaastu/home/.hermes/...
+bash "$PROFILE_SKILLS/working-acestep/scripts/acestep-hermes.sh" generate ...
+
+# CORRECT — always hard-code absolute path, cd to /tmp first
+cd /tmp
+bash /home/gowrav/.hermes/shared-skills/working-acestep/scripts/acestep-hermes.sh generate ...
+```
+If `$ACESTEP_DIR` is not set in your `.env`, this path is your fallback:
+`/home/gowrav/.hermes/shared-skills/working-acestep/scripts/acestep-hermes.sh`
+
 ### Debugging API errors
 If the wrapper gives unclear errors, call the REST API directly for transparent output:
 ```bash
@@ -331,6 +366,12 @@ curl -s -X POST http://127.0.0.1:8001/release_task \
   -d '{"task_type": "text2music", "prompt": "your description", "thinking": true, "batch_size": 2, "audio_format": "mp3"}'
 ```
 
+### VRAM pre-flight check fails with batch > 1 and long duration
+The API pre-checks VRAM availability before starting. If the server is sharing GPU memory with other tasks, batch 2 + long duration (120s+) with sft model can fail:
+```
+VRAM pre-flight failed: Insufficient free VRAM: need ~1.7 GB, only 0.4 GB available.
+```
+**Fix:** Always stop the server (`stop-server`) before regenerating when batch 2 fails, then retry with batch 1. The sft model at 50 steps for 120s needs ~1.7GB free — stop competing processes to free VRAM.
 ### First generation slow
 Models are lazy-loaded on first request. First generation takes longer (model download + init). Subsequent calls are fast.
 
@@ -570,3 +611,17 @@ Then deliver the `.mp3` files (typically ~6MB each) as media attachments to the 
 - MP3: delivery-friendly copy for sharing
 
 **Always send MP3s, never WAVs.** The user prefers ~6MB MP3 files over ~30MB WAV for delivery.
+
+### Telegram Audio Delivery — OGG Voice Notes
+
+MP3s at 320kbps can be ~8MB and Telegram struggles to display them inline. For **audio delivery over Telegram**, convert to OGG voice notes instead:
+
+```bash
+cd "$ACESTEP_OUTPUT_DIR"
+JOB_ID="<job_id>"
+for i in 1 2; do
+  ffmpeg -y -i "${JOB_ID}_${i}.mp3" -acodec libopus -b:a 48k -ac 1 "${JOB_ID}_${i}.ogg"
+done
+```
+
+Result: ~700KB OGG files that play natively as Telegram voice notes. Deliver `.ogg` files for Telegram audio — NOT `.mp3`.

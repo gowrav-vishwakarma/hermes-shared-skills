@@ -16,7 +16,7 @@ Orchestrates a single video per post: one anchor image + one ~20 s video, stored
 
 ## Movie mode (multi-scene long-form)
 
-For **movies** (3+ connected scenes forming a story), use the `wan2gp-movie-pipeline` skill instead of this workflow. Movies use a different pattern:
+For **movies** (3+ connected scenes forming a story), use the `wan2gp-movie-pipeline` skill instead of this workflow. **Important:** The asset library (`assets.json`, `$CHARACTER_ASSETS_DIR`) belongs to this per-post journey workflow only -- movies do NOT use the manifest or shared assets. Movies are self-contained and manage their own local images inside the movie folder. Movies use a different pattern:
 
 - Folder: `$POSTS_DIR/YYYY-MM-DD_movie_<tag>/` (with `_movie_` in the slug)
 - Agent writes a full `movie_script.json` with all scenes upfront
@@ -191,7 +191,7 @@ If incomplete posts exist, **ask the user**: "I found [N] incomplete post(s) fro
 
 9. **Author video.** Before writing the video prompt, **load and carefully read** the `wan2gp-video-generation` skill AND its `references/ltx-2-3-prompting.md` (the full prompting deep-dive covering temporal connectors, AV sync, duration strategy, lens language, scene design vocabulary, and dialogue segmentation). Use what you read to plan a dramatic, well-structured video prompt -- do not wing it from memory.
 
-**Model choice:** Default `--model gguf` (8 steps, fastest) is fine for iteration. For WanGP's built-in LoRAs (HDR, outpaint, union-control), use `--model distilled-1.1` (8 steps, similar speed). See `wan2gp-video-generation` skill "Model selection" section for both variants.
+**Model choice:** Default `--model distilled-1.1` (8 steps, auto-LoRAs for HDR/outpaint/union-control). For fastest iteration without compile overhead, use `--model gguf` (8 steps, C++ runtime). See `wan2gp-video-generation` skill "Model selection" section for both variants.
 
 **Video gen workflow (split approach -- NEVER use `--run`):**
 - **Step A:** `python3 "$PROFILE_SKILLS/wan2gp-video-generation/scripts/generate_video_config.py" --aspect <chosen> --image-start <anchor>.jpg --output-dir <post-dir>` (writes JSON, takes ~2s)

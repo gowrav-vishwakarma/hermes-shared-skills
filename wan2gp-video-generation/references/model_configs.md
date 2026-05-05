@@ -6,12 +6,12 @@ Two LTX-2.3 22B checkpoints are available. The helper script `generate_video_con
 
 | Alias | Checkpoint file | Size | `model_type` | Steps | Solver | Notes |
 |---|---|---|---|---|---|---|
-| `gguf` (default) | `ltx-2.3-22b-distilled-Q6_K_light.gguf` | 16 GB | `ltx2_22B_distilled_gguf_q6_k` | 8 | template default | Fastest. GGUF Q6_K quantized. Good for iteration. |
-| `distilled-1.1` | `ltx-2.3-22b-distilled-1.1_diffusion_model_quanto_bf16_int8.safetensors` | 19 GB | `ltx2_22B_distilled_1_1` | 8 | template default | Distilled v1.1. WanGP auto-loads HDR, outpaint, and union-control LoRAs internally when needed. |
+| `distilled-1.1` (default) | `ltx-2.3-22b-distilled-1.1_diffusion_model_quanto_bf16_int8.safetensors` | 19 GB | `ltx2_22B_distilled_1_1` | 8 | template default | Distilled v1.1. WanGP auto-loads HDR, outpaint, and union-control LoRAs internally when needed. |
+| `gguf` | `ltx-2.3-22b-distilled-Q6_K_light.gguf` | 16 GB | `ltx2_22B_distilled_gguf_q6_k` | 8 | template default | Fastest. GGUF Q6_K quantized. Good for iteration. |
 
 Both share `base_model_type: "ltx2_22B"`.
 
-## gguf (default)
+## gguf
 
 - **When to use**: Day-to-day iteration, quick previews, batch renders.
 - **Steps**: 8 (distilled -- more steps give diminishing returns).
@@ -19,9 +19,9 @@ Both share `base_model_type: "ltx2_22B"`.
 - **LoRAs**: None baked in. Templates ship with empty `activated_loras`. Add LoRAs explicitly via `--activated-loras` / `--loras-multipliers`.
 - **VRAM**: ~16 GB peak with `--profile 4 --fp16`.
 
-## distilled-1.1
+## distilled-1.1 (default)
 
-- **When to use**: When you want the distilled speed (8 steps) but need WanGP's built-in HDR/outpaint/union-control LoRA support. These LoRAs are loaded automatically by WanGP when the model type is `ltx2_22B_distilled_1_1` -- they do NOT appear in `activated_loras` in the JSON.
+- **When to use**: When you want the distilled speed (8 steps) with WanGP's built-in HDR/outpaint/union-control LoRA support. These LoRAs are loaded automatically by WanGP when the model type is `ltx2_22B_distilled_1_1` -- they do NOT appear in `activated_loras` in the JSON.
 - **Steps**: 8.
 - **Guidance scale**: Same as gguf (1--3, default 3).
 - **LoRAs**: WanGP auto-loads these internally (not in our template):

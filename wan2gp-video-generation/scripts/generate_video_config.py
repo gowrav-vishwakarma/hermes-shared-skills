@@ -27,6 +27,13 @@ Usage (I2V from anchor):
         --output-filename character_aurora_reel \\
         --output-dir /home/.../posts/2026-04-30_5
 
+Usage (Continue from previous video):
+    python3 generate_video_config.py \\
+        --prompt "She continues walking along the bank..." \\
+        --video-source /home/.../scene_01/scene_01_video.mp4 \\
+        --output-filename scene_02_video \\
+        --output-dir /home/.../scene_02
+
 Add `--run` to also execute `wgp.py --process` from the WanGP venv.
 """
 
@@ -100,8 +107,9 @@ MODEL_CHOICES = sorted(MODEL_CONFIGS)
 
 
 def resolve_template(template_arg: str | None, image_start: str | None,
-                     aspect: str | None = None) -> Path:
-    """Pick a template file based on shorthand, path, anchor presence, or aspect."""
+                     aspect: str | None = None,
+                     video_source: str | None = None) -> Path:
+    """Pick a template file based on shorthand, path, anchor/video presence, or aspect."""
     if template_arg:
         candidate = Path(template_arg)
         if candidate.is_file():
@@ -117,7 +125,7 @@ def resolve_template(template_arg: str | None, image_start: str | None,
             f"Aliases: {sorted(TEMPLATE_ALIASES)}"
         )
     is_landscape = aspect == "16:9"
-    if image_start:
+    if image_start or video_source:
         return TEMPLATES_DIR / ("ltx-2.3-i2v-16x9.json" if is_landscape else "ltx-2.3-i2v.json")
     return TEMPLATES_DIR / ("ltx-2.3-t2v-16x9.json" if is_landscape else "ltx-2.3-t2v.json")
 
@@ -174,7 +182,20 @@ def build_settings(template_path: Path, args: argparse.Namespace) -> dict:
         settings["activated_loras"] = []
         settings["loras_multipliers"] = ""
 
-    if args.image_start:
+    if args.video_source and args.image_start:
+        raise SystemExit(
+            "[generate_video_config] --video-source and --image-start are "
+            "mutually exclusive. Use one or the other."
+        )
+
+    if args.video_source:
+        settings["image_mode"] = 0
+        settings["image_prompt_type"] = "V"
+        settings["input_video_strength"] = 1
+        settings["video_source"] = args.video_source
+        settings["keep_frames_video_source"] = args.keep_frames_video_source
+
+    elif args.image_start:
         # LTX-2.3 native I2V (`image_mode: 1`) crashes at the VAE step in
         # WanGP. The proven workaround keeps `image_mode: 0` and feeds the
         # anchor through `image_prompt_type: "S"` + `input_video_strength: 1`
@@ -197,6 +218,15 @@ def main() -> int:
     ap.add_argument(
         "--image-start", default=None,
         help="Absolute path to anchor JPG/PNG (auto-switches template to I2V).",
+    )
+    ap.add_argument(
+        "--video-source", default=None,
+        help="Absolute path to video to continue from (sets image_prompt_type='V'). "
+             "Mutually exclusive with --image-start.",
+    )
+    ap.add_argument(
+        "--keep-frames-video-source", default="",
+        help="Frames to keep from source video (empty=all, negative=truncate from end).",
     )
     ap.add_argument("--output-filename", required=True,
                     help="WanGP `output_filename` (basename, no extension).")
@@ -221,10 +251,10 @@ def main() -> int:
     ap.add_argument("--activated-loras", nargs="*", default=None)
     ap.add_argument("--no-loras", action="store_true",
                     help="Clear all LoRAs (overrides template defaults).")
-    ap.add_argument("--model", default="gguf", choices=MODEL_CHOICES,
+    ap.add_argument("--model", default="distilled-1.1", choices=MODEL_CHOICES,
                     help="LTX-2.3 checkpoint variant. Sets model_filename, model_type, "
                          f"and num_inference_steps. Choices: {MODEL_CHOICES}. "
-                         "Default: gguf.")
+                         "Default: distilled-1.1.")
     ap.add_argument("--template", default=None,
                     help=f"Template path or alias. Aliases: {sorted(TEMPLATE_ALIASES)}")
     ap.add_argument("--run", action="store_true",
@@ -239,7 +269,8 @@ def main() -> int:
     if args.resolution is None:
         args.resolution = ASPECT_RESOLUTIONS.get(args.aspect, "720x1280")
 
-    template_path = resolve_template(args.template, args.image_start, args.aspect)
+    template_path = resolve_template(args.template, args.image_start, args.aspect,
+                                     args.video_source)
     settings = build_settings(template_path, args)
 
     out_path = out_dir / "video_generation.json"
@@ -255,9 +286,18 @@ def main() -> int:
         f"video_length={settings['video_length']} "
         f"sliding_window_size={settings['sliding_window_size']} "
         f"image_start={'yes' if args.image_start else 'no'} "
+        f"video_source={'yes' if args.video_source else 'no'} "
         f"loras=[{loras_str}]",
         file=sys.stderr,
     )
+    if args.video_source:
+        print(
+            "[generate_video_config] continue mode: video_source is set, so "
+            "WanGP will continue from the last frames of the source video. "
+            "The prompt should describe what happens NEXT (pure continuation "
+            "motion), not re-describe the source video's content.",
+            file=sys.stderr,
+        )
     if args.image_start:
         # Anchor <-> Reel coherence reminder. LTX-2.3 in I2V mode decodes from
         # the anchor as frame 0, so the prompt opening MUST mirror the anchor

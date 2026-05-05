@@ -58,6 +58,8 @@ Always pass **absolute paths** to `--output-dir`, `--assets-dir`, and `--ref-ass
 
 ## Asset library
 
+> **Scope: journey and regular posts only.** The asset library (`assets.json`) and `$CHARACTER_ASSETS_DIR` are for the character's ongoing journey managed by `video-create-workflow`. Movies do NOT use the manifest -- they manage their own local assets inside the movie folder. See `wan2gp-movie-pipeline` for movie asset handling.
+
 **Layout:**
 
 ```
@@ -229,6 +231,10 @@ The helpers auto-pick `I` vs `KI` based on ref count and first-ref aspect, enfor
   - Explicitly negate: "No fantasy elements, no magical glow, nothing overly saturated"
   - Even with these cues, the output may still lean toward AI-perfect — be prepared to iterate with more aggressive imperfection cues or consider that Qwen may not be capable of pure photorealism for nature scenes.
   - **Session evidence (2026-05-05):** First attempt with "photorealistic" prompt was rejected as "not that great." Second attempt with "documentary photography, Canon EOS R5, 35mm lens" prompt was still rejected as leaning too AI-perfect (hyper-clarity, bloom lighting, texture uniformity). Two iterations needed, quality still debatable.
+
+## Supporting references
+
+- [`references/qwen-realism-challenge.md`](references/qwen-realism-challenge.md) — Qwen's inherent hyper-perfect aesthetic and workarounds for documentary/photorealistic style.
 
 - **Aspect ratio mismatch when regenerating existing assets.** When you regenerate an asset that already exists in `assets.json`, the `--aspect` flag sets the new aspect ratio but old files with the old aspect ratio may still exist on disk (renamed with `(2)` suffix or backup names). **Always check for stale files after regeneration:**
   - After `generate_asset.py --force --run`, check the assets directory for files matching the slug name that aren't the expected `slug.jpg` and `slug.json`

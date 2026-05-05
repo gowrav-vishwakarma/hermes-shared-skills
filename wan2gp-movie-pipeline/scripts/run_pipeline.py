@@ -44,7 +44,6 @@ WAN_APP_DIR = required("WAN_APP_DIR")
 _wan_python_override = os.environ.get("WAN_PYTHON")
 WAN_PYTHON = Path(_wan_python_override) if _wan_python_override else WAN_APP_DIR / "env" / "bin" / "python"
 WGP_SCRIPT = WAN_APP_DIR / "wgp.py"
-ASSETS_DIR = required("CHARACTER_ASSETS_DIR")
 
 GPU_POLL_INTERVAL = 30
 GPU_MAX_WAIT = 1800  # 30 minutes max wait for GPU
@@ -231,8 +230,37 @@ def detect_video(scene_dir: Path, basename: str) -> Path | None:
     return None
 
 
-def run_image_gen(scene: dict, scene_dir: Path, script: dict) -> int:
-    """Generate anchor image via generate_image_config.py --run."""
+def extract_last_frame(video_path: Path, output_path: Path) -> int:
+    """Extract the last frame from a video as a JPG image."""
+    cmd = [
+        "ffmpeg", "-y", "-loglevel", "error",
+        "-sseof", "-0.04",
+        "-i", str(video_path),
+        "-vframes", "1", "-update", "1",
+        str(output_path),
+    ]
+    log(f"  Extracting last frame: {video_path.name} -> {output_path.name}")
+    return subprocess.call(cmd)
+
+
+def resolve_scene_video(scene_id: str, movie_dir: Path,
+                        progress: dict) -> Path | None:
+    """Find the completed raw video for a given scene."""
+    sp = progress.get("scenes", {}).get(scene_id, {})
+    if sp.get("status") != "completed":
+        return None
+    vf = sp.get("steps", {}).get("video_gen", {}).get("file")
+    if not vf:
+        return None
+    path = movie_dir / vf
+    return path if path.is_file() else None
+
+
+def run_image_gen(scene: dict, scene_dir: Path, script: dict, movie_dir: Path) -> int:
+    """Generate anchor image via generate_image_config.py --run.
+
+    Resolves image_refs as paths relative to movie_dir (no manifest).
+    """
     cmd = [
         str(WAN_PYTHON), str(IMAGE_GEN_SCRIPT),
         "--prompt", scene["anchor_prompt"],
@@ -242,38 +270,48 @@ def run_image_gen(scene: dict, scene_dir: Path, script: dict) -> int:
         "--seed", str(script["seed"]),
     ]
 
-    ref_assets = scene.get("ref_assets", [])
-    if ref_assets:
-        cmd.extend(["--ref-assets"] + ref_assets)
+    image_refs = scene.get("image_refs", [])
+    if image_refs:
+        abs_refs = [str((movie_dir / ref).resolve()) for ref in image_refs]
+        cmd.extend(["--image-refs"] + abs_refs)
 
     cmd.append("--run")
 
     log(f"  Running image gen: {scene['anchor_filename']}")
-    env = os.environ.copy()
-    env["CHARACTER_ASSETS_DIR"] = str(ASSETS_DIR)
-    return subprocess.call(cmd, cwd=str(WAN_APP_DIR), env=env)
+    return subprocess.call(cmd, cwd=str(WAN_APP_DIR))
 
 
-def run_video_gen(scene: dict, scene_dir: Path, script: dict, anchor_path: Path) -> int:
-    """Generate video config then run wgp.py."""
+def run_video_gen(scene: dict, scene_dir: Path, script: dict,
+                  anchor_path: Path | None = None,
+                  video_source: Path | None = None) -> int:
+    """Generate video config then run wgp.py.
+
+    Exactly one of anchor_path (I2V) or video_source (Continue Video) must
+    be provided.
+    """
     config_cmd = [
         str(WAN_PYTHON), str(VIDEO_GEN_SCRIPT),
         "--prompt", scene["video_prompt"],
-        "--image-start", str(anchor_path),
         "--output-filename", scene["video_filename"],
         "--output-dir", str(scene_dir),
         "--aspect", script.get("aspect", "9:16"),
         "--seed", str(script["seed"]),
     ]
 
-    model = script.get("model", "gguf")
-    if model != "gguf":
+    if video_source:
+        config_cmd.extend(["--video-source", str(video_source)])
+        log(f"  Writing video config (continue mode): {scene['video_filename']}")
+    elif anchor_path:
+        config_cmd.extend(["--image-start", str(anchor_path)])
+        log(f"  Writing video config (I2V): {scene['video_filename']}")
+    else:
+        log(f"  Writing video config (T2V): {scene['video_filename']}")
+
+    model = script.get("model", "distilled-1.1")
+    if model != "distilled-1.1":
         config_cmd.extend(["--model", model])
 
-    log(f"  Writing video config: {scene['video_filename']}")
-    env = os.environ.copy()
-    env["CHARACTER_ASSETS_DIR"] = str(ASSETS_DIR)
-    rc = subprocess.call(config_cmd, cwd=str(WAN_APP_DIR), env=env)
+    rc = subprocess.call(config_cmd, cwd=str(WAN_APP_DIR))
     if rc != 0:
         log(f"  ERROR: generate_video_config.py exited {rc}")
         return rc
@@ -291,10 +329,8 @@ def run_video_gen(scene: dict, scene_dir: Path, script: dict, anchor_path: Path)
         "--profile", "4", "--fp16",
     ]
 
-    env = os.environ.copy()
-    env["CHARACTER_ASSETS_DIR"] = str(ASSETS_DIR)
     log(f"  Running wgp.py for video (this takes 3-10 min)...")
-    return subprocess.call(wgp_cmd, cwd=str(WAN_APP_DIR), env=env)
+    return subprocess.call(wgp_cmd, cwd=str(WAN_APP_DIR))
 
 
 def run_compress(raw_path: Path, compressed_path: Path) -> int:
@@ -359,12 +395,171 @@ def run_concat(movie_dir: Path, script: dict) -> int:
 # Main pipeline loop
 # ---------------------------------------------------------------------------
 
+def _step_anchor_gen(
+    scene: dict, scene_dir: Path, script: dict,
+    progress: dict, progress_path: Path, movie_dir: Path,
+    steps: dict,
+) -> Path | None:
+    """Run anchor generation. Returns anchor path or None on failure."""
+    if steps["anchor_gen"]["status"] == "done":
+        return detect_anchor(scene_dir, scene["anchor_filename"])
+
+    existing = detect_anchor(scene_dir, scene["anchor_filename"])
+    if existing:
+        log(f"  Anchor already exists: {existing.name}, skipping gen")
+        steps["anchor_gen"]["status"] = "done"
+        steps["anchor_gen"]["file"] = str(existing.relative_to(scene_dir.parent))
+        steps["anchor_gen"]["finished_at"] = now_iso()
+        atomic_write_json(progress_path, progress)
+        return existing
+
+    progress["current_step"] = "anchor_gen"
+    steps["anchor_gen"]["status"] = "running"
+    steps["anchor_gen"]["started_at"] = now_iso()
+    atomic_write_json(progress_path, progress)
+
+    if not wait_for_gpu():
+        return None
+
+    rc = run_image_gen(scene, scene_dir, script, movie_dir)
+    if rc != 0:
+        log(f"  ERROR: Image generation failed (exit {rc})")
+        steps["anchor_gen"]["status"] = "failed"
+        steps["anchor_gen"]["error"] = f"exit code {rc}"
+        atomic_write_json(progress_path, progress)
+        return None
+
+    anchor = detect_anchor(scene_dir, scene["anchor_filename"])
+    if not anchor:
+        log(f"  ERROR: Anchor image not found after generation")
+        steps["anchor_gen"]["status"] = "failed"
+        steps["anchor_gen"]["error"] = "output file not found"
+        atomic_write_json(progress_path, progress)
+        return None
+
+    steps["anchor_gen"]["status"] = "done"
+    steps["anchor_gen"]["file"] = str(anchor.relative_to(scene_dir.parent))
+    steps["anchor_gen"]["finished_at"] = now_iso()
+    atomic_write_json(progress_path, progress)
+    log(f"  anchor_gen DONE ({anchor.name})")
+    return anchor
+
+
+def _step_video_gen(
+    scene: dict, scene_dir: Path, script: dict,
+    progress: dict, progress_path: Path,
+    steps: dict,
+    anchor_path: Path | None = None,
+    video_source: Path | None = None,
+) -> Path | None:
+    """Run video generation. Returns video path or None on failure."""
+    if steps["video_gen"]["status"] == "done":
+        vf = steps["video_gen"].get("file")
+        return (scene_dir.parent / vf) if vf else None
+
+    existing_video = detect_video(scene_dir, scene["video_filename"])
+    if existing_video:
+        log(f"  Video already exists: {existing_video.name}, skipping gen")
+        steps["video_gen"]["status"] = "done"
+        steps["video_gen"]["file"] = str(existing_video.relative_to(scene_dir.parent))
+        steps["video_gen"]["finished_at"] = now_iso()
+        atomic_write_json(progress_path, progress)
+        return existing_video
+
+    if not video_source and not anchor_path:
+        log(f"  ERROR: Cannot generate video -- no anchor image or video source")
+        steps["video_gen"]["status"] = "failed"
+        steps["video_gen"]["error"] = "no anchor image or video source"
+        atomic_write_json(progress_path, progress)
+        return None
+
+    progress["current_step"] = "video_gen"
+    steps["video_gen"]["status"] = "running"
+    steps["video_gen"]["started_at"] = now_iso()
+    atomic_write_json(progress_path, progress)
+
+    if not wait_for_gpu():
+        return None
+
+    rc = run_video_gen(scene, scene_dir, script,
+                       anchor_path=anchor_path, video_source=video_source)
+    if rc != 0:
+        log(f"  ERROR: Video generation failed (exit {rc})")
+        steps["video_gen"]["status"] = "failed"
+        steps["video_gen"]["error"] = f"exit code {rc}"
+        atomic_write_json(progress_path, progress)
+        return None
+
+    video = detect_video(scene_dir, scene["video_filename"])
+    if not video:
+        log(f"  ERROR: Video file not found after generation")
+        steps["video_gen"]["status"] = "failed"
+        steps["video_gen"]["error"] = "output file not found"
+        atomic_write_json(progress_path, progress)
+        return None
+
+    size_mb = round(video.stat().st_size / 1_048_576, 1)
+    steps["video_gen"]["status"] = "done"
+    steps["video_gen"]["file"] = str(video.relative_to(scene_dir.parent))
+    steps["video_gen"]["finished_at"] = now_iso()
+    atomic_write_json(progress_path, progress)
+    log(f"  video_gen DONE ({video.name}, {size_mb}MB)")
+    return video
+
+
+def _step_compress(
+    scene: dict, scene_dir: Path,
+    progress: dict, progress_path: Path,
+    steps: dict,
+) -> bool:
+    """Run compression. Returns True on success."""
+    if steps["compress"]["status"] == "done":
+        return True
+
+    video_file = steps["video_gen"].get("file")
+    if not video_file:
+        log(f"  ERROR: Cannot compress -- no video file recorded")
+        return False
+
+    raw_path = scene_dir.parent / video_file
+    compressed_path = scene_dir / f"{scene['video_filename']}_compressed.mp4"
+
+    if compressed_path.is_file() and compressed_path.stat().st_size > 100_000:
+        log(f"  Compressed file already exists: {compressed_path.name}")
+        steps["compress"]["status"] = "done"
+        steps["compress"]["file"] = str(compressed_path.relative_to(scene_dir.parent))
+        steps["compress"]["finished_at"] = now_iso()
+        atomic_write_json(progress_path, progress)
+        return True
+
+    progress["current_step"] = "compress"
+    steps["compress"]["status"] = "running"
+    atomic_write_json(progress_path, progress)
+
+    rc = run_compress(raw_path, compressed_path)
+    if rc != 0:
+        log(f"  ERROR: Compression failed (exit {rc})")
+        steps["compress"]["status"] = "failed"
+        steps["compress"]["error"] = f"exit code {rc}"
+        atomic_write_json(progress_path, progress)
+        return False
+
+    size_mb = round(compressed_path.stat().st_size / 1_048_576, 1)
+    steps["compress"]["status"] = "done"
+    steps["compress"]["file"] = str(compressed_path.relative_to(scene_dir.parent))
+    steps["compress"]["finished_at"] = now_iso()
+    atomic_write_json(progress_path, progress)
+    log(f"  compress DONE ({compressed_path.name}, {size_mb}MB)")
+    return True
+
+
 def process_scene(
     scene: dict,
     scene_dir: Path,
     script: dict,
     progress: dict,
     progress_path: Path,
+    movie_dir: Path,
 ) -> bool:
     """Process a single scene. Returns True on success, False on failure."""
     sid = scene["id"]
@@ -374,133 +569,96 @@ def process_scene(
     progress["current_scene"] = sid
     scene_progress["status"] = "in_progress"
 
-    # --- Step 1: Anchor generation ---
-    if steps["anchor_gen"]["status"] != "done":
-        existing = detect_anchor(scene_dir, scene["anchor_filename"])
-        if existing:
-            log(f"  Anchor already exists: {existing.name}, skipping gen")
-            steps["anchor_gen"]["status"] = "done"
-            steps["anchor_gen"]["file"] = str(existing.relative_to(scene_dir.parent))
-            steps["anchor_gen"]["finished_at"] = now_iso()
-        else:
-            progress["current_step"] = "anchor_gen"
-            steps["anchor_gen"]["status"] = "running"
-            steps["anchor_gen"]["started_at"] = now_iso()
+    continue_from = scene.get("continue_from")
+    anchor_from_last_frame = scene.get("anchor_from_last_frame")
+
+    if continue_from:
+        # ---- Mode A: WanGP native Continue Video ----
+        log(f"  Mode: continue_from={continue_from}")
+
+        # Skip anchor_gen entirely
+        steps["anchor_gen"]["status"] = "done"
+        steps["anchor_gen"]["skipped"] = True
+        steps["anchor_gen"]["finished_at"] = now_iso()
+
+        src_video = resolve_scene_video(continue_from, movie_dir, progress)
+        if not src_video:
+            log(f"  ERROR: source scene '{continue_from}' has no completed video")
+            steps["video_gen"]["status"] = "failed"
+            steps["video_gen"]["error"] = f"source scene '{continue_from}' video not found"
             atomic_write_json(progress_path, progress)
-
-            if not wait_for_gpu():
-                return False
-
-            rc = run_image_gen(scene, scene_dir, script)
-            if rc != 0:
-                log(f"  ERROR: Image generation failed (exit {rc})")
-                steps["anchor_gen"]["status"] = "failed"
-                steps["anchor_gen"]["error"] = f"exit code {rc}"
-                atomic_write_json(progress_path, progress)
-                return False
-
-            anchor = detect_anchor(scene_dir, scene["anchor_filename"])
-            if not anchor:
-                log(f"  ERROR: Anchor image not found after generation")
-                steps["anchor_gen"]["status"] = "failed"
-                steps["anchor_gen"]["error"] = "output file not found"
-                atomic_write_json(progress_path, progress)
-                return False
-
-            steps["anchor_gen"]["status"] = "done"
-            steps["anchor_gen"]["file"] = str(anchor.relative_to(scene_dir.parent))
-            steps["anchor_gen"]["finished_at"] = now_iso()
-            atomic_write_json(progress_path, progress)
-            log(f"  anchor_gen DONE ({anchor.name})")
-
-    if _shutdown_requested:
-        return False
-
-    # --- Step 2: Video generation ---
-    if steps["video_gen"]["status"] != "done":
-        existing_video = detect_video(scene_dir, scene["video_filename"])
-        if existing_video:
-            log(f"  Video already exists: {existing_video.name}, skipping gen")
-            steps["video_gen"]["status"] = "done"
-            steps["video_gen"]["file"] = str(existing_video.relative_to(scene_dir.parent))
-            steps["video_gen"]["finished_at"] = now_iso()
-        else:
-            anchor = detect_anchor(scene_dir, scene["anchor_filename"])
-            if not anchor:
-                log(f"  ERROR: Cannot generate video -- anchor image missing")
-                steps["video_gen"]["status"] = "failed"
-                steps["video_gen"]["error"] = "anchor image missing"
-                atomic_write_json(progress_path, progress)
-                return False
-
-            progress["current_step"] = "video_gen"
-            steps["video_gen"]["status"] = "running"
-            steps["video_gen"]["started_at"] = now_iso()
-            atomic_write_json(progress_path, progress)
-
-            if not wait_for_gpu():
-                return False
-
-            rc = run_video_gen(scene, scene_dir, script, anchor)
-            if rc != 0:
-                log(f"  ERROR: Video generation failed (exit {rc})")
-                steps["video_gen"]["status"] = "failed"
-                steps["video_gen"]["error"] = f"exit code {rc}"
-                atomic_write_json(progress_path, progress)
-                return False
-
-            video = detect_video(scene_dir, scene["video_filename"])
-            if not video:
-                log(f"  ERROR: Video file not found after generation")
-                steps["video_gen"]["status"] = "failed"
-                steps["video_gen"]["error"] = "output file not found"
-                atomic_write_json(progress_path, progress)
-                return False
-
-            size_mb = round(video.stat().st_size / 1_048_576, 1)
-            steps["video_gen"]["status"] = "done"
-            steps["video_gen"]["file"] = str(video.relative_to(scene_dir.parent))
-            steps["video_gen"]["finished_at"] = now_iso()
-            atomic_write_json(progress_path, progress)
-            log(f"  video_gen DONE ({video.name}, {size_mb}MB)")
-
-    if _shutdown_requested:
-        return False
-
-    # --- Step 3: Compression ---
-    if steps["compress"]["status"] != "done":
-        video_file = steps["video_gen"].get("file")
-        if not video_file:
-            log(f"  ERROR: Cannot compress -- no video file recorded")
             return False
 
-        raw_path = scene_dir.parent / video_file
-        compressed_path = scene_dir / f"{scene['video_filename']}_compressed.mp4"
+        log(f"  Source video: {src_video}")
 
-        if compressed_path.is_file() and compressed_path.stat().st_size > 100_000:
-            log(f"  Compressed file already exists: {compressed_path.name}")
-            steps["compress"]["status"] = "done"
-            steps["compress"]["file"] = str(compressed_path.relative_to(scene_dir.parent))
-            steps["compress"]["finished_at"] = now_iso()
-        else:
-            progress["current_step"] = "compress"
-            steps["compress"]["status"] = "running"
+        if _shutdown_requested:
+            return False
+
+        if not _step_video_gen(scene, scene_dir, script, progress,
+                               progress_path, steps, video_source=src_video):
+            return False
+
+    elif anchor_from_last_frame:
+        # ---- Mode B: Last-frame extraction + normal I2V ----
+        log(f"  Mode: anchor_from_last_frame={anchor_from_last_frame}")
+
+        src_video = resolve_scene_video(anchor_from_last_frame, movie_dir, progress)
+        if not src_video:
+            log(f"  ERROR: source scene '{anchor_from_last_frame}' has no completed video")
+            steps["anchor_gen"]["status"] = "failed"
+            steps["anchor_gen"]["error"] = f"source scene '{anchor_from_last_frame}' video not found"
             atomic_write_json(progress_path, progress)
+            return False
 
-            rc = run_compress(raw_path, compressed_path)
-            if rc != 0:
-                log(f"  ERROR: Compression failed (exit {rc})")
-                steps["compress"]["status"] = "failed"
-                steps["compress"]["error"] = f"exit code {rc}"
+        lastframe_path = scene_dir / f"{scene['anchor_filename']}_lastframe.jpg"
+        if not lastframe_path.is_file():
+            rc = extract_last_frame(src_video, lastframe_path)
+            if rc != 0 or not lastframe_path.is_file():
+                log(f"  ERROR: last-frame extraction failed")
+                steps["anchor_gen"]["status"] = "failed"
+                steps["anchor_gen"]["error"] = "ffmpeg last-frame extraction failed"
                 atomic_write_json(progress_path, progress)
                 return False
 
-            size_mb = round(compressed_path.stat().st_size / 1_048_576, 1)
-            steps["compress"]["status"] = "done"
-            steps["compress"]["file"] = str(compressed_path.relative_to(scene_dir.parent))
-            steps["compress"]["finished_at"] = now_iso()
-            atomic_write_json(progress_path, progress)
-            log(f"  compress DONE ({compressed_path.name}, {size_mb}MB)")
+        image_refs = scene.get("image_refs", [])
+        scene["image_refs"] = [
+            str(lastframe_path.relative_to(movie_dir)),
+            *image_refs,
+        ]
+        log(f"  Prepended last-frame to image_refs: {scene['image_refs']}")
+
+        anchor = _step_anchor_gen(scene, scene_dir, script, progress,
+                                  progress_path, movie_dir, steps)
+        if anchor is None:
+            return False
+
+        if _shutdown_requested:
+            return False
+
+        if not _step_video_gen(scene, scene_dir, script, progress,
+                               progress_path, steps, anchor_path=anchor):
+            return False
+
+    else:
+        # ---- Normal flow: anchor_gen -> video_gen ----
+        anchor = _step_anchor_gen(scene, scene_dir, script, progress,
+                                  progress_path, movie_dir, steps)
+        if anchor is None:
+            return False
+
+        if _shutdown_requested:
+            return False
+
+        if not _step_video_gen(scene, scene_dir, script, progress,
+                               progress_path, steps, anchor_path=anchor):
+            return False
+
+    if _shutdown_requested:
+        return False
+
+    # --- Compression (all modes) ---
+    if not _step_compress(scene, scene_dir, progress, progress_path, steps):
+        return False
 
     scene_progress["status"] = "completed"
     progress["completed_scenes"] = sum(
@@ -541,7 +699,7 @@ def main() -> int:
 
     log(f"=== MOVIE PIPELINE START ===")
     log(f"Movie: {script.get('title', '(untitled)')} ({len(script['scenes'])} scenes)")
-    log(f"Seed: {script.get('seed', -1)} | Model: {script.get('model', 'gguf')} | Aspect: {script.get('aspect', '9:16')}")
+    log(f"Seed: {script.get('seed', -1)} | Model: {script.get('model', 'distilled-1.1')} | Aspect: {script.get('aspect', '9:16')}")
     log(f"PID: {os.getpid()}")
 
     already_done = sum(
@@ -565,7 +723,7 @@ def main() -> int:
         scene_dir = movie_dir / sid
         scene_dir.mkdir(parents=True, exist_ok=True)
 
-        if not process_scene(scene, scene_dir, script, progress, progress_path):
+        if not process_scene(scene, scene_dir, script, progress, progress_path, movie_dir):
             if _shutdown_requested:
                 log(f"Pipeline interrupted at {sid}")
             else:

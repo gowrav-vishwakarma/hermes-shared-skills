@@ -14,14 +14,13 @@ import argparse
 import json
 import os
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 REQUIRED_MOVIE_FIELDS = {"title", "aspect", "seed", "scenes"}
-REQUIRED_SCENE_FIELDS = {
-    "id", "title", "image_refs", "anchor_prompt",
-    "anchor_filename", "video_prompt", "video_filename",
+BASE_SCENE_FIELDS = {
+    "id", "title", "anchor_filename", "video_prompt", "video_filename",
 }
+ANCHOR_SCENE_FIELDS = {"anchor_prompt", "image_refs"}
 VALID_ASPECTS = {"9:16", "16:9"}
 VALID_MODELS = {"gguf", "distilled-1.1"}
 
@@ -29,6 +28,8 @@ def validate_script(script: dict, movie_dir: Path) -> list[str]:
     """Return a list of validation errors (empty = valid).
 
     Validates image_refs as local paths relative to movie_dir (no manifest).
+    Validates continue_from / anchor_from_last_frame mutual exclusivity and
+    scene ordering.
     """
     errors: list[str] = []
 
@@ -40,7 +41,7 @@ def validate_script(script: dict, movie_dir: Path) -> list[str]:
     if aspect and aspect not in VALID_ASPECTS:
         errors.append(f"Invalid aspect '{aspect}'; must be one of {VALID_ASPECTS}")
 
-    model = script.get("model", "gguf")
+    model = script.get("model", "distilled-1.1")
     if model not in VALID_MODELS:
         errors.append(f"Invalid model '{model}'; must be one of {VALID_MODELS}")
 
@@ -52,21 +53,57 @@ def validate_script(script: dict, movie_dir: Path) -> list[str]:
     if not scenes:
         errors.append("scenes array is empty")
 
-    seen_ids: set[str] = set()
+    seen_ids: list[str] = []
     for i, scene in enumerate(scenes):
         prefix = f"scenes[{i}]"
         if not isinstance(scene, dict):
             errors.append(f"{prefix}: must be an object")
             continue
 
-        for field in REQUIRED_SCENE_FIELDS:
+        continue_from = scene.get("continue_from")
+        anchor_from_last = scene.get("anchor_from_last_frame")
+
+        if continue_from and anchor_from_last:
+            errors.append(
+                f"{prefix}: cannot have both 'continue_from' and "
+                f"'anchor_from_last_frame' on the same scene"
+            )
+
+        for field in BASE_SCENE_FIELDS:
             if field not in scene:
                 errors.append(f"{prefix}: missing field '{field}'")
+
+        if not continue_from:
+            for field in ANCHOR_SCENE_FIELDS:
+                if field not in scene:
+                    errors.append(f"{prefix}: missing field '{field}' "
+                                  f"(required unless 'continue_from' is set)")
 
         sid = scene.get("id", "")
         if sid in seen_ids:
             errors.append(f"{prefix}: duplicate scene id '{sid}'")
-        seen_ids.add(sid)
+        seen_ids.append(sid)
+
+        if continue_from:
+            if continue_from not in seen_ids:
+                if continue_from == sid:
+                    errors.append(f"{prefix}: 'continue_from' cannot reference itself")
+                else:
+                    errors.append(
+                        f"{prefix}: 'continue_from' references '{continue_from}' "
+                        f"which has not appeared earlier in the scenes array"
+                    )
+
+        if anchor_from_last:
+            if anchor_from_last not in seen_ids:
+                if anchor_from_last == sid:
+                    errors.append(f"{prefix}: 'anchor_from_last_frame' cannot reference itself")
+                else:
+                    errors.append(
+                        f"{prefix}: 'anchor_from_last_frame' references "
+                        f"'{anchor_from_last}' which has not appeared earlier "
+                        f"in the scenes array"
+                    )
 
         image_refs = scene.get("image_refs", [])
         if len(image_refs) > 3:
@@ -135,9 +172,8 @@ def main() -> int:
         return 1
 
     script = json.loads(script_path.read_text())
-    manifest = load_manifest()
 
-    errors = validate_script(script, manifest)
+    errors = validate_script(script, movie_dir)
     if errors:
         print("VALIDATION ERRORS:", file=sys.stderr)
         for e in errors:
@@ -155,11 +191,16 @@ def main() -> int:
     print(f"  Title:  {script.get('title', '(untitled)')}")
     print(f"  Aspect: {script.get('aspect', '9:16')}")
     print(f"  Seed:   {script.get('seed', -1)}")
-    print(f"  Model:  {script.get('model', 'gguf')}")
+    print(f"  Model:  {script.get('model', 'distilled-1.1')}")
     print(f"  Scenes: {len(script['scenes'])}")
     for scene in script["scenes"]:
-        refs = ", ".join(scene.get("ref_assets", [])) or "(none)"
-        print(f"    {scene['id']}: {scene['title']} [refs: {refs}]")
+        mode = "normal"
+        if scene.get("continue_from"):
+            mode = f"continue_from={scene['continue_from']}"
+        elif scene.get("anchor_from_last_frame"):
+            mode = f"anchor_from_last_frame={scene['anchor_from_last_frame']}"
+        refs = ", ".join(scene.get("image_refs", [])) or "(none)"
+        print(f"    {scene['id']}: {scene['title']} [{mode}] [image_refs: {refs}]")
     print(f"\nProgress file: {movie_dir / 'progress.json'}")
     print("Run: python3 .../run_pipeline.py --movie-dir", movie_dir)
     return 0
