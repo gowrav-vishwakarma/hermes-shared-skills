@@ -391,8 +391,9 @@ Models are lazy-loaded on first request. First generation takes longer (model do
 - **Model requirements**: Extract, Lego, and Complete modes require the **base model** (`acestep-v15-base`). Generate, Cover, and Repaint work with the default **turbo model**. If you want ALL features from one server, configure it to load the base model — it handles everything (just uses 50 steps instead of 8, so slower). Set `--steps 50` and `--guidance 7.0` when using base/sft models.
 - **First run**: The API server auto-starts on first use. Initial startup takes ~30-60 seconds while models load. Subsequent calls are instant.
 - **Stop server when done**: The server holds GPU memory as long as it runs. Always run `stop-server` when finished to free VRAM for other tasks.
-- **Thinking mode**: Enabled by default for better quality. Use `--no-thinking` for faster generation when quality is less critical.
+- **Thinking mode**: Enabled by default for better quality. Use `--no-thinking` for faster generation when quality planning isn't needed (e.g., simple background music).
 - **Duration**: For songs with lyrics, let the LM auto-detect duration (omit `--duration`). For instrumentals, specify explicitly.
+- **Duration is NOT enforced**: The API often generates longer output than the `--duration` parameter specifies (e.g., requesting 20s produced 107s). **Always trim the output audio** with `ffmpeg -i input.wav -t D -c:a aac output.mp3` after generation. Check the JSON metadata (`$ACESTEP_OUTPUT_DIR/<job_id>.json`) for the actual duration.
 - **Lyrics input**: Always pass COMPLETE lyrics. However, see pitfall below about truncation.
 - **Lyrics truncation**: When lyrics are very long relative to `--duration`, the LM may auto-truncate them, producing a shorter song than requested. Check the JSON metadata after generation to verify actual duration. If truncation occurs, reduce lyric length or increase `--duration`.
 - **Batch exploration**: Use `--batch 4` (or 2-8) to generate multiple variations at once. Pick the best direction, then iterate with Cover/Repaint. This is far more effective than single-shot generation.

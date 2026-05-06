@@ -97,9 +97,33 @@ $PROFILE_HOME/
 }
 ```
 
+### Character Asset Generation Workflow (Isolated)
+
+When the user requests character asset generation for branding, follow this specific workflow to ensure reusability and consistent output quality:
+
+1. **Isolation:** Use "Simple studio background, high-key lighting, isolated character, no background details" in the prompt to ensure the model focuses purely on the character silhouette.
+2. **Naming Convention:** Always use the requested slug (e.g., `character_girl`, `character_geek_boy`) and ensure the final file saved to `$CHARACTER_ASSETS_DIR` is a `.png`.
+3. **Automated Conversion:** The WanGP pipeline generates `.jpg` by default. Always follow up with a terminal `mv` command to rename the output to `.png` to match the requested assets folder naming convention.
+4. **Consistency:** Ensure the prompt describes the character's clothing and style accurately based on the user's provided description, while enforcing the "no background" constraint.
+
+When the user sends a photo to use as their base character, **NEVER just copy it as `character.png`**. The original may be in any aspect ratio (4:3, landscape, square, etc.) and will distort or miscompose in video generation workflows that expect 9:16.
+
+**Correct workflow:**
+
+1. **Save the original separately:** `cp <user-photo> "$CHARACTER_ASSETS_DIR/character_original.png"` (or similar name). This preserves the exact source.
+2. **Generate a proper 9:16 version** using `generate_image_config.py --run` with the original as `--image-refs`, targeting `--aspect 9:16`. This uses WanGP's image model to re-compose the character without stretching or distortion.
+3. **Copy the 9:16 version as `character.png`:** `cp "$PROFILE_HOME/character_9x16.jpg" "$PROFILE_HOME/character.png"`. This becomes the main identity anchor.
+4. **Register both in `assets.json`:** `character_original` (kind: character, aspect: free) and `character_base` (kind: character, aspect: 9:16).
+
+**Why:** Video prompts expect a consistent aspect ratio for anchors. A 4:3 or landscape source photo will cause composition mismatches when WanGP composites the character into 9:16 video frames. The 9:16 generation step re-frames the character correctly.
+
 ## Pick the best character ref
 
 Do NOT always pass `character_base`. Before each anchor, inspect all `kind: "character"` assets in `assets.json` and choose the slug that best matches the current outfit, helmet state, pose, or angle. Use `character_base` only as the fallback when no specific `character_*` asset fits the scene.
+
+**Character asset bootstrap (initial setup):** When setting up a new character, do NOT use the original photo directly as `character.png` if it's not 9:16. Generate a clean 9:16 version first using `generate_image_config.py --image-refs <original_photo>`, save the generated version as `character.png`, and keep the original with a different name (e.g., `character_original.png`). This ensures proper aspect ratio for video anchors.
+
+**Multi-variant LoRA testing workflow:** When user wants to test the same scene with different LoRA weights (e.g., Pixar_Toon at 1.5 vs 3.0), do NOT regenerate the anchor — copy the previous post's `video_generation.json` to a new `YYYY-MM-DD_#` folder, change only the LoRA weight(s), and regenerate the video. This saves 2-3 minutes per variant since the anchor already exists.
 
 ## Ref-count decision (0 / 1 / 2 / 3)
 
@@ -112,7 +136,31 @@ The Qwen Image Edit Plus 2511 cap is **3 refs**, but the cap is a maximum, not a
 | **2** | Identity + one recurring environment or vehicle/creature. | `--ref-assets <best_character_slug> spaceship_cockpit` |
 | **3** | Identity + creature/vehicle + location all need simultaneous locking. | `--ref-assets <best_character_slug> creature_moon_guardian location_lunar_cavern` |
 
-## Golden rule for location assets
+**Character asset aspect ratio handling:**
+
+When your provided character photo has a different aspect ratio than needed for video (e.g., 4:3 photo for 9:16 video), do NOT crop or stretch it. Instead:
+
+1. **Save the original** as `character_original.png` (preserves the exact source).
+2. **Generate a new version** using WanGP with `--aspect <target>` and `--image-refs <original>`. This creates a clean, correctly-proportioned character image without distortion.
+3. **Set the generated version** as the main `character.png` for the profile.
+
+Example:
+```bash
+cp /path/to/user/photo.jpg "$CHARACTER_ASSETS_DIR/character_original.png"
+python3 "$PROFILE_SKILLS/wan2gp-image-generation/scripts/generate_image_config.py" \
+    --prompt "Cinematic medium shot, 9:16. The man (image 1) with short dark hair thinning on top, wire-rimmed glasses, light-colored button-down shirt, confident friendly expression. Seated in office chair. Clean 9:16 composition, natural lighting, realistic photograph style -- Canon EOS R5, 85mm lens." \
+    --image-refs "$CHARACTER_ASSETS_DIR/character_original.png" \
+    --output-filename character_9x16 \
+    --output-dir "$PROFILE_HOME" \
+    --aspect 9:16 \
+    --seed 742981 \
+    --run
+cp "$PROFILE_HOME/character_9x16.jpg" "$PROFILE_HOME/character.png"
+```
+
+This avoids stretching or cropping that would distort facial features or body proportions. The generated image will have the correct composition and aspect ratio while preserving character identity.
+
+**Golden rule for location assets:**
 
 Location and interior assets must be generated as **clean, character-free plates**. Never bake a character into a location asset -- it kills reusability.
 
@@ -133,6 +181,8 @@ Describe each reference by index in the prompt, with the slug for auditability:
 > **Pitfall: swapping ref order.** If you write "image 1 is the room, image 2 is the character" but pass `--image-refs character.png location.png`, Qwen will put the character IN the room's place and the room as the character. Always verify the order matches the prompt.
 
 > **Pitfall: forgetting character_base.** When the user has a `character.png` base image, ALWAYS use it as the first image ref for character anchors. This locks identity across all posts. Do not generate a new character image from scratch.
+
+> **Pitfall: sticker images cannot be extracted.** Telegram stickers are vector/metadata objects, not embedded images — `browser_get_images` returns 0 hits. If the user sends a character/photo as a sticker, ask them to resend as a **regular image** (no sticker format). Session evidence (2026-05-05): user sent base character as sticker, agent failed to extract image, had to ask for regular photo. Wasted one turn.
 
 ## Helper invocations
 
@@ -213,6 +263,8 @@ The helpers auto-pick `I` vs `KI` based on ref count and first-ref aspect, enfor
 ## Operational rules
 
 - **Sequential only.** Never run two `wgp.py` jobs at once (24 GB VRAM / OOM risk).
+- **3-ref anchors need extended timeout.** Generating anchors with 3 reference images (the cap) is significantly more VRAM-intensive than 2-ref or 1-ref anchors and can timeout at the default 180s wall-clock limit. **Always use `timeout 480` (or higher) when running `generate_image_config.py` with `--ref-assets` specifying 3 slugs.** Example: `timeout 480 python3 "$PROFILE_SKILLS/wan2gp-image-generation/scripts/generate_image_config.py" ... --run`. A 2-ref anchor typically completes in ~3 min; a 3-ref anchor can take ~3.5 min. If it fails with `[Command timed out]` but no output file exists, retry with the longer timeout.
+- **Character images may exist on disk but not in manifest.** Before using `--ref-assets <slug>` with character images, always verify the slug is registered in `$CHARACTER_ASSETS_MANIFEST`. Character images generated in a prior session or manually placed may not be registered. Use `cat "$CHARACTER_ASSETS_MANIFEST" | python3 -c "import sys,json; print(list(json.load(sys.stdin)['assets'].keys()))"` to list registered slugs. If missing, register via `generate_asset.py --run` or manually add to `assets.json` before proceeding to anchor generation.
 - **Kill orphans.** Before starting a new run: `ps aux | grep wgp.py` and `kill -9` any stray processes (the WanGP web UI can leave hidden processes). **WARNING:** If `kill -9` fails with "Cannot send process signal", the process is in D-state (uninterruptible sleep) and the GPU driver is deadlocked. Do NOT continue — the system is already hanging. Run `nvidia-smi` to confirm; if it hangs, a hard reboot is the only recovery. See `wan2gp-video-generation:references/orphan-process-hang.md` for full case study and prevention checklist.
 - **WanGP Python.** When invoking `wgp.py` manually (without `--run`), always use `$WAN_PYTHON` (= `$WAN_APP_DIR/env/bin/python`). System `python3` lacks PyTorch. See [`references/execution-pitfalls.md`](references/execution-pitfalls.md).
 - **Verify asset registration before anchor gen.** Before running `generate_image_config.py` with a `--ref-assets <slug>`, confirm the slug is registered in `$CHARACTER_ASSETS_MANIFEST`:

@@ -106,8 +106,9 @@ Or edit directly via Python/JSON before running `wgp.py`. Never trust multi-LoRA
 
 ## User preferences (Gowrav)
 
-- **Always use LoRA 1.5 multiplier for style LoRAs.** User explicitly requested "with LoRA 1.5 always" — this is the standard, not an exception. Do not ask about LoRA weight unless the user specifies otherwise.
-- **Start with strongest LoRA first.** When testing style LoRAs, begin at 1.5 and only reduce if the output is too distorted. Do not start at 0.5 and progressively increase — the user wants to see the full style effect immediately.
+- **Pixar_Toon LoRA multiplier range: 1.0, 1.5, 2.0.** User has used all three in session 2026-05-05: 1.0 (subtle, clean character), 1.5 (balanced Pixar, default for character content), 2.0 (maximum effect, exaggerated cartoon features). The user generates batch variations across these weights to compare. Do not ask about multiplier — use what the user specifies, or default to 1.5 if unspecified.
+- **Always use LoRA 1.5 multiplier for other style LoRAs.** When not using Pixar_Toon, use 1.5. Do not ask about LoRA weight unless the user specifies otherwise.
+- **Start with strongest LoRA first.** When testing style LoRAs, begin at the strongest (1.5 or 2.0 for Pixar) and only reduce if the output is too distorted. Do not start at 0.5 and progressively increase — the user wants to see the full style effect immediately.
 - **Temporary/one-off assets should not be registered.** When user says "no asset" or "it's a temp creation", generate the asset image directly in the post folder without calling `generate_asset.py --run` or adding to `assets.json`. This was confirmed working with the jungle river session.
 
 ## Pitfalls

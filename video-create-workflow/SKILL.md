@@ -12,11 +12,17 @@ metadata:
 
 # Per-Post Video Workflow
 
+### Workflow Principles
+- **Avoid Talking-Head Default:** Do not assume the user wants an avatar-based intro. If the user requests a "video montage" or "reel," default to the "Observer" concept (Montage + HUD Overlay + AI-themed monitor feed) unless explicitly asked for a character/avatar intro.
+- **Concept Validation:** Present the "Observer" concept (e.g., neural monitor, AI dashboard feed) to the user *before* beginning generation to ensure the aesthetic aligns with their brand.
+- **No Character Assets:** Explicitly avoid character.png or persona assets unless specifically authorized.
+
 Orchestrates a single video per post: one anchor image + one ~20 s video, stored under `$POSTS_DIR/<YYYY-MM-DD_#>/`. Supports **9:16** (portrait / Instagram reels) and **16:9** (landscape / YouTube / cinematic).
 
 > **3D alternative:** If the user rejects AI video (WanGP) and wants 3D animation instead, use Blender (`/snap/bin/blender`) -- see `creative:references/blender-available.md`.
 
-Image craft in wan2gp-image-generation; video craft in wan2gp-video-generation; persona in SOUL.md.
+- Image craft in wan2gp-image-generation; video craft in wan2gp-video-generation; persona in SOUL.md.
+- **Cinematic Montages:** See `references/neural-montage.md` for the "Neural Feed" strategy (high-speed screenshot montages with data-processing HUDs).
 
 For **movies** (3+ connected scenes forming a story), use the `wan2gp-movie-pipeline` skill instead of this workflow. **Important:** The asset library (`assets.json`, `$CHARACTER_ASSETS_DIR`) belongs to this per-post journey workflow only -- movies do NOT use the manifest or shared assets. Movies are self-contained and manage their own local images inside the movie folder. Movies use a different pattern:
 
@@ -30,7 +36,13 @@ For **movies** (3+ connected scenes forming a story), use the `wan2gp-movie-pipe
 
 **When to stay here:** Single reels, 1-2 independent posts, or unrelated batch reels. This per-post workflow handles those.
 
-## Environment variables
+### Screenshot Capture (Pre-requisite Step)
+
+When sourcing visual content from browsers (Instagram, TikTok, etc.), load and follow the `browser-automation-workflow` skill FIRST. Key pitfall: **browser_vision screenshots go to ephemeral cache and are lost if not saved to disk immediately.** Always copy screenshots from cache to your post folder right after capture, before any browser navigation or clicking.
+
+**Never spend more than 3 turns trying to navigate a stubborn website.** If keyboard scrolling or `browser_scroll` fails, ask the user for direct URLs rather than looping.
+
+**Image and video helpers (delegated to `wan2gp-image-generation` / `wan2gp-video-generation`) require `WAN_APP_DIR`, `WAN_PYTHON`, `CHARACTER_ASSETS_DIR`, `CHARACTER_BASE` -- see those skills.**
 
 **CRITICAL: The `.env` file is NOT auto-sourced into agent subprocess shells.** Before running any helper script, you MUST manually source it:
 
@@ -60,9 +72,15 @@ Used by this workflow:
 - `POSTS_DIR` -- `$PROFILE_HOME/posts`
 - `MEMORY_FILE` -- `$PROFILE_ROOT/memories/MEMORY.md`
 - `JOURNEY_FILE` -- `$PROFILE_HOME/journey.jsonl`
-- `CHARACTER_ASSETS_MANIFEST` -- `$PROFILE_HOME/assets/assets.json`
+**When to stay here:** Single reels, 1-2 independent posts, or unrelated batch reels. This per-post workflow handles those.
 
-Image and video helpers (delegated to `wan2gp-image-generation` / `wan2gp-video-generation`) require `WAN_APP_DIR`, `WAN_PYTHON`, `CHARACTER_ASSETS_DIR`, `CHARACTER_BASE` -- see those skills.
+### Screenshot Capture (Pre-requisite Step)
+
+When sourcing visual content from browsers (Instagram, TikTok, etc.), load and follow the `browser-automation-workflow` skill FIRST. Key pitfall: **browser_vision screenshots go to ephemeral cache and are lost if not saved to disk immediately.** Always copy screenshots from cache to your post folder right after capture, before any browser navigation or clicking.
+
+**Never spend more than 3 turns trying to navigate a stubborn website.** If keyboard scrolling or `browser_scroll` fails, ask the user for direct URLs rather than looping.
+
+**Image and video helpers (delegated to `wan2gp-image-generation` / `wan2gp-video-generation`) require `WAN_APP_DIR`, `WAN_PYTHON`, `CHARACTER_ASSETS_DIR`, `CHARACTER_BASE` -- see those skills.**
 
 ## Per-post protocol (every post, no skips)
 
@@ -121,7 +139,13 @@ When the user asks for multiple reels (e.g., "make 5 reels — fun, dance, seduc
 
 1. **Each reel gets its own post folder** with a unique `YYYY-MM-DD_#` index and its own `video_generation.json` config. This lets the user review settings per-video after the fact.
 2. **Send the completed video IMMEDIATELY** after each reel finishes. Do NOT wait to batch-send at the end. Send each one individually as it completes, then start the next reel.
-3. **Never generate multiple background gens at once** — sequential only (24 GB VRAM).
+3. **Never generate multiple background gens at once** — sequential only (24 GB VRAM). **CRITICAL: Launching 2+ `wgp.py` processes simultaneously causes ALL of them to crash with `exit code -9` (SIGKILL)** at the exact same point: `Pinning data of 'transformer' to reserved RAM`. This is because distilled-1.1 needs ~19GB and only ~5GB is available after OS. The parallel launch does NOT queue — it OOM-cascades everything. **Rule: ONE `wgp.py` at a time. Always check `ps aux | grep "wgp.py" | grep -v grep` before starting.**
+
+3b. **Process wrapper stdout is unreliable for diagnosis.** The Hermes background process wrapper sometimes fails to capture stdout, showing `total_lines: 0` or `output_preview: ""` even when the process IS generating. **Do NOT use process output to diagnose hangs.** Instead:
+  1. Check output files: `ls -lh <post-dir>/*.mp4`
+  2. Check GPU: `nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv,noheader`
+  3. Check process: `ps aux | grep "wgp.py" | grep -v grep`
+  If GPU shows >0% utilization AND a wgp.py process exists, generation IS happening. The "0 lines" output is a wrapper limitation, not a failure.
 4. **Avoid crowd scenes / multiple characters in I2V.** LTX-2.3 struggles with more than 1-2 people — the model produces artifacts. Keep reels to a single character whenever possible.
 5. **Config-first, GPU-second pipeline.** When generating multiple reels, write ALL video generation configs first (Step A for each, ~2s per config), THEN start the first GPU job. This keeps GPU idle time to near zero — you never wait 2s for a config while the GPU sits.
 6. **Temporary asset handling.** When the user explicitly says "do not save any asset" or "it's a temp creation", skip `generate_asset.py --run` entirely. Instead, generate the asset image directly with `generate_image_config.py --run` in the post folder (not assets/). This creates a one-off image for that post only.
@@ -181,6 +205,8 @@ If incomplete posts exist, **ask the user**: "I found [N] incomplete post(s) fro
 
 8. **Author anchor.** If the scene's character + composition already exists as an asset in `assets.json` that matches the desired anchor (same outfit, angle, framing), **reuse it directly** — copy it into the post folder as the anchor. No need to call `generate_image_config.py` unless you need a NEW composition. Example: using `character_kurti_palazzo` as the anchor for a mid-closeup against a plain wall saved a full WanGP image generation step. When generating a new anchor via WanGP instead, see `wan2gp-image-generation` for prompting craft and helper flags. If user asks then send image first to confirm and if user needs more options generate and send but make sure that you use the new image for video. Always use a unique anchor filename per post so video picks the selected image only.
 
+> **Pitfall: unnecessary anchor regeneration.** When the user says "use the main character image" or explicitly wants to skip anchor generation, do NOT create a new anchor via WanGP. Use `character.png` directly as `--image-start` in the video config. Generating an intermediate anchor (e.g., a "Pixar-style" anchor) wastes 2-3 minutes of GPU time when the user's intent is to use the base character photo as the I2V anchor. Only generate new anchors when the scene requires a different outfit, pose, angle, or composition that doesn't exist in `character.png` or the asset library.
+
 9. **Author video.** Before writing the video prompt, **load and carefully read** the `wan2gp-video-generation` skill AND its `references/ltx-2-3-prompting.md` (the full prompting deep-dive covering temporal connectors, AV sync, duration strategy, lens language, scene design vocabulary, and dialogue segmentation). Use what you read to plan a dramatic, well-structured video prompt -- do not wing it from memory.
 
 **Model choice:** Default `--model distilled-1.1` (8 steps, auto-LoRAs for HDR/outpaint/union-control). For fastest iteration without compile overhead, use `--model gguf` (8 steps, C++ runtime). See `wan2gp-video-generation` skill "Model selection" section for both variants.
@@ -193,6 +219,19 @@ If incomplete posts exist, **ask the user**: "I found [N] incomplete post(s) fro
 - **Complete when:** monitor returns exit code 0 + "COMPLETED"
 
 The skill also documents the full split approach. See `wan2gp-video-generation` skill.
+
+**Trend copy reels (dance / lip-sync to source video):** When copying a trend from a reference video, always pass `--audio-from-control-video` to sync the character's motion to the source video's music/audio. This sets `audio_prompt_type: "K"` which extracts audio from the control video (`--video-guide`) and conditions generation on it. The character will dance to the same beats and lip-sync to the same audio as the original trend.
+
+```bash
+python3 "$PROFILE_SKILLS/wan2gp-video-generation/scripts/generate_video_config.py" \
+    --prompt "..." \
+    --image-start <character_anchor>.jpg \
+    --video-guide <trend_source>.mp4 \
+    --video-prompt-type OVG \
+    --audio-from-control-video \
+    --output-filename trend_dance_v1 \
+    --output-dir "$POSTS_DIR/..."
+```
 
 > **CRITICAL: Video prompt ≠ anchor prompt duplication.**
 > The anchor image IS frame 0. LTX-2.3 already has the static visual from the anchor.

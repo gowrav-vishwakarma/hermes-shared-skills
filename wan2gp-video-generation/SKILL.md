@@ -363,6 +363,22 @@ A common mistake is writing `"Dialogue in Hindi-accented voice"` or `"Comedic ca
 
 **Verification step:** Read through the prompt and count all quoted strings. If there's an audio direction about accent/language but zero (or too few) quoted strings, you have the trap.
 
+#### CRITICAL: CTA/Last Quote Must NOT Be the Final Element in Extended Videos
+
+When a video is extended beyond the dialogue length (e.g., 30s vs 20s via sliding window), and the last quoted text in the prompt is the CTA line ("If you're watching this, go to my profile..."), the model runs out of quoted text and **loops back to the FIRST quoted line** in the prompt, creating unintelligible repeating dialogue (e.g., "Hi I am the AI agent of Gaurav") for the remaining seconds.
+
+**Fix:** Move the CTA earlier in the dialogue, then end with a **visual closing beat** (wave, camera pull-back, smile, gesture) with NO quoted text. The model fills the extra time with continuous action instead of looping.
+
+**Example — correct:** "If you're watching this, go to my profile..." He gives a respectful nod. He smiles warmly, raises a hand in a friendly wave, and the camera slowly pulls back as he turns to admire the skyline.
+
+**Wrong:** "If you're watching this, go to my profile..." [model loops to first quote for remaining 10s]
+
+**Pre-flight checklist for extended videos (30s+):**
+1. Read through all quoted strings in order
+2. Confirm the CTA is NOT the last quoted string
+3. After the last quoted string, verify there is at least one visual beat (wave, camera move, gesture, smile) with zero quoted text
+4. The prompt must end with a camera movement or held action, not a dialogue line
+
 #### Pre-flight Checklist
 
 Before running, verify every spoken line is:
@@ -375,14 +391,34 @@ Before running, verify every spoken line is:
 
 ---
 
-### Multi-Character Scenes
+## Multi-Character Scenes (Manual Config)
 
-Scenes with 2+ characters require careful camera pacing to avoid visual confusion.
+When introducing multiple characters using `--image-start`, the CLI helper `generate_video_config.py` often binds only the first image path. To bind multiple images:
 
-- **Linger before transitioning.** Hold on one speaker for their full line and reaction before moving to the next.
-- **Flow through reactions.** Describe transitions as natural camera movements -- pan, follow a gesture, shift focus -- not cuts.
-- **Physical handoffs.** Have one character gesture toward the other or look in their direction, then describe the camera following that gesture.
-- **Keep it to 2-3 characters.** More than 3 subjects in a 20-second shot overwhelms the model.
+1. Generate the config via `generate_video_config.py`.
+2. Open the resulting `video_generation.json`.
+3. Locate `"image_start"` and change the string value to an array:
+   ```json
+   "image_start": [
+     "/absolute/path/to/char1.png",
+     "/absolute/path/to/char2.png",
+     "/absolute/path/to/char3.png"
+   ]
+   ```
+4. Ensure `model_type` is present at both the root level AND inside the task object:
+   ```json
+   {
+     "model_type": "ltx2_22B_distilled_1_1",
+     "tasks": [
+       {
+         "model_type": "ltx2_22B_distilled_1_1",
+         ...
+       }
+     ]
+   }
+   ```
+This manually bound structure ensures WanGP correctly utilizes all character anchors for the multi-character scene.
+
 
 **Example (two characters, ~15 s):**
 
@@ -495,7 +531,7 @@ Build a complete soundscape by combining three audio layers:
 
 ---
 
-## I2V Coherence (mandatory when `--image-start` is set)
+- **Multiple Input Images in I2V:** While the CLI `generate_video_config.py` often accepts single image paths, complex character introductions with multiple characters require explicit array formatting in the resulting `video_generation.json`. If you need to introduce multiple characters, write the base JSON with an `"image_start": ["path1", "path2", "path3"]` array manually via `write_file` after generating the config to ensure all anchor visuals are correctly bound to the generation task.
 
 LTX-2.3 I2V decodes from the anchor as frame 0 and continues -- it is a single continuous shot.
 
@@ -517,7 +553,55 @@ LTX-2.3 I2V decodes from the anchor as frame 0 and continues -- it is a single c
 
 ## Audio Direction
 
-Describe the acoustic environment, character voice qualities, and ambient sounds. Pull persona-specific voice qualities (accent, tone, verbal quirks) from `SOUL.md` -- this skill does not define them.
+LTX-2.3 supports two audio modes:
+
+1. **Text-based audio generation (default, `audio_prompt_type: ""`)** -- the model generates audio internally from the prompt. Speech from quoted dialogue, ambient sounds from audio direction text. No external file needed.
+2. **External audio conditioning (`audio_prompt_type: "A"` or `"K"`)** -- the model generates video **synced to an external soundtrack**. This enables lip-sync to music, dance sync to beats, and dialogue sync to voice tracks.
+
+### Audio input modes
+
+| `audio_prompt_type` | Description | When to use |
+|---|---|---|
+| `""` (empty, default) | Generate audio from text prompt | Normal reels with AI-generated speech/music |
+| `"A"` | Condition on external audio file (`audio_guide`) | You have a specific music track or voiceover to sync to |
+| `"K"` (distilled only) | Extract audio from control video (`video_guide`) and condition on it | **Trend copy / dance reels** -- character dances to the same music as the source video |
+
+### Using external audio (`audio_prompt_type: "A"`)
+
+Provide the audio file path via `--audio-guide`:
+```bash
+python3 .../generate_video_config.py \
+    --prompt "The character dances energetically to the beat..." \
+    --image-start "$POSTS_DIR/.../anchor.jpg" \
+    --audio-guide "/path/to/music.wav" \
+    --output-filename dance_reel \
+    --output-dir "$POSTS_DIR/..."
+```
+
+The helper auto-sets `audio_prompt_type: "A"` when `--audio-guide` is provided.
+
+### Using control video audio (`audio_prompt_type: "K"`)
+
+When using a control video (`video_guide` for motion transfer), set `--audio-from-control-video` to extract and use its audio track. This is the ideal mode for **trend copy reels** -- the character's motion follows the control video's pose AND syncs to its music.
+
+```bash
+python3 .../generate_video_config.py \
+    --prompt "Pixar-style character dances confidently to the beat..." \
+    --image-start "$POSTS_DIR/.../character.jpg" \
+    --video-guide "$POSTS_DIR/.../trend_source.mp4" \
+    --video-prompt-type OVG \
+    --audio-from-control-video \
+    --output-filename trend_dance \
+    --output-dir "$POSTS_DIR/..."
+```
+
+**Requirement:** `"K"` requires `"V"` in `video_prompt_type` (a control video must be set). The helper validates this.
+
+**`--audio-scale`** controls how strongly the model follows the audio conditioning (default 1.0). Lower values give the model more freedom; higher values tighten sync.
+
+### Text-based audio (default mode)
+
+When no external audio is provided, describe the acoustic environment in the prompt:
 
 Patterns that work:
 - `Audio: low station hum, soft plasma crackle, intimate close-mic.`
@@ -603,6 +687,8 @@ The helper will report: `EXTENDED VIDEO: 2 sliding windows will be generated for
 - **I2V is strongly recommended** for extended videos. With `--image-start` or `--video-source`, each window conditions on prior frames, maintaining visual continuity. Pure T2V (no anchor) generates each window independently -- the windows will look disconnected.
 - **Watch for color/lighting drift** at window boundaries in very long videos (3+ windows). The `sliding_window_color_correction_strength` parameter (0 by default) can help -- set to a small value (0.1-0.3) if you notice color shifts.
 - **Prompt length matters even more** for extended videos. A short prompt spread over 40+ seconds leaves the model directionless after the first window. Write detailed, temporally structured prompts that describe action across the full duration.
+
+**Confirmed limitation (2026-05-06):** When using sliding window T2V with `video_length > 481`, the text-to-frame mapping resets per window. Window 2 (frames 465–721) re-reads the same prompt — so if the CTA is the last quoted text, the model maps the FIRST quoted line to those frames, causing dialogue repetition ("Hi I am the AI agent..." repeats from the start). **For avatar/intro talking-head videos, keep dialogue within 481 frames (20s).** Extending to 30s via sliding window will cause the model to loop back to the first spoken line for the extra ~10s. **Fix options:** (a) Accept 20s max — the natural limit with clean dialogue, (b) For 30s+, move CTA earlier, end with visual closing beat (no speech), OR use movie pipeline `continue_from` with Scene 1 = dialogue (0–20s) + Scene 2 = visual closing beat only (20–30s).
 - **VRAM usage is the same** as a single-pass 20s video -- each window is processed independently at `sliding_window_size` frames. No additional VRAM needed for longer videos.
 
 - **Extended video output files.** When `--video-length > 481` (sliding window mode), WanGP writes **multiple output files** during a single job:
@@ -646,6 +732,200 @@ ffmpeg -i <input.mp4> -vcodec libx264 -acodec aac -strict experimental \
 ```
 
 Typical results (720x1280, 20s): 54-88 MB input compresses to 3.8-4.7 MB (~91-95% reduction). Compression takes ~10-20 seconds. If original is already under 20MB, skip compression and send directly.
+
+---
+
+## Trend Copy (Motion Transfer from Reference Video)
+
+Copy a trending Instagram reel by transferring its motion/pose to your character. WanGP's LTX-2.3 distilled model has built-in **Control Video** modes that extract pose, depth, or edge structure from a reference video and use it to guide generation of a new video with your character.
+
+### Available Control Modes
+
+| Mode | `video_prompt_type` | What it extracts | Best for |
+|---|---|---|---|
+| Aligned Pose Transfer | `OVG` | DWPose skeleton, aligned to character | Dance trends, workout routines, expressive body movement. Requires `--image-start`. |
+| Human Motion Transfer | `PVG` | DWPose skeleton (unaligned) | Same as OVG but when character proportions match the original. |
+| Depth Transfer | `DVG` | Depth map (Depth Anything v3) | Scenic/camera-movement trends, spatial layout preservation. |
+| Canny Edge Transfer | `EVG` | Canny edge map | Object-focused trends, precise shape/outline copying. |
+| Raw Format | `VG` | Raw video for IC LoRA | Advanced: passes the control video directly. |
+
+The `union-control` LoRA (`ltx-2.3-22b-ic-lora-union-control-ref0.5.safetensors`) auto-loads when O/P/D/E is in `video_prompt_type`.
+
+### Quick Start -- Convenience Script
+
+```bash
+# Download + generate config in one step:
+python3 "$PROFILE_SKILLS/wan2gp-video-generation/scripts/copy_trend.py" \
+    --url "https://www.instagram.com/reel/XXXXX/" \
+    --character-image "$CHARACTER_ASSETS_DIR/character_anchor.jpg" \
+    --prompt "A young woman performs the trending dance in a bright studio, wearing a casual outfit. She moves confidently, hitting each beat. Camera follows her motion. Audio: upbeat pop track." \
+    --output-dir "$POSTS_DIR/2026-05-06_trend" \
+    --output-filename trend_copy_v1 \
+    --mode OVG \
+    --config-only
+
+# Or use a pre-downloaded video:
+python3 "$PROFILE_SKILLS/wan2gp-video-generation/scripts/copy_trend.py" \
+    --trend-video "$POSTS_DIR/2026-05-06_trend/trend_source.mp4" \
+    --character-image "$CHARACTER_ASSETS_DIR/character_anchor.jpg" \
+    --prompt "..." \
+    --output-dir "$POSTS_DIR/2026-05-06_trend" \
+    --output-filename trend_copy_v1 \
+    --mode OVG \
+    --config-only
+
+# Download only (inspect before generating):
+python3 "$PROFILE_SKILLS/wan2gp-video-generation/scripts/copy_trend.py" \
+    --url "https://www.instagram.com/reel/XXXXX/" \
+    --download-only \
+    --output-dir "$POSTS_DIR/2026-05-06_trend"
+```
+
+### Manual Workflow -- Step by Step
+
+**Step 1: Download the trending reel.**
+```bash
+yt-dlp -o "$POSTS_DIR/2026-05-06_trend/trend_source.%(ext)s" \
+    --merge-output-format mp4 \
+    "https://www.instagram.com/reel/XXXXX/"
+```
+
+**Step 2: Inspect the downloaded video.**
+```bash
+ffprobe -v quiet -print_format json -show_format -show_streams \
+    "$POSTS_DIR/2026-05-06_trend/trend_source.mp4"
+```
+
+**Step 3: Generate config with control video.**
+```bash
+python3 "$PROFILE_SKILLS/wan2gp-video-generation/scripts/generate_video_config.py" \
+    --prompt "A young woman performs the trending dance..." \
+    --video-guide "$POSTS_DIR/2026-05-06_trend/trend_source.mp4" \
+    --image-start "$CHARACTER_ASSETS_DIR/character_anchor.jpg" \
+    --video-prompt-type OVG \
+    --denoising-strength 1.0 \
+    --output-filename trend_copy_v1 \
+    --output-dir "$POSTS_DIR/2026-05-06_trend" \
+    --aspect 9:16 \
+    --seed 42
+```
+
+**Step 4: Run generation (background).**
+```bash
+set -a; source $PROFILE_ROOT/.env; set +a
+TORCHINDUCTOR_FORCE_DISABLE=1 "$WAN_PYTHON" "$WAN_APP_DIR/wgp.py" \
+    --process "$POSTS_DIR/2026-05-06_trend/video_generation.json" \
+    --output-dir "$POSTS_DIR/2026-05-06_trend" \
+    --attention sage2 --profile 4
+```
+
+### Config Fields for Control Video
+
+These are the JSON fields `generate_video_config.py` sets when `--video-guide` is used:
+
+| Field | Value | Description |
+|---|---|---|
+| `video_guide` | `/path/to/trend.mp4` | The reference video whose motion/structure will be transferred |
+| `video_prompt_type` | `"OVG"`, `"PVG"`, etc. | Which preprocessing to apply to the guide video |
+| `image_start` | `/path/to/character.jpg` | Character anchor (required for OVG, recommended for all) |
+| `image_prompt_type` | `"S"` | Set automatically when `--image-start` is provided |
+| `denoising_strength` | `1.0` | 1.0=full regeneration with character, lower=more blending |
+| `keep_frames_video_guide` | `""` | Frames to keep from guide video (empty=all) |
+
+### Prompting for Trend Copy
+
+When writing prompts for trend copies, describe your character performing the same action as the trend, but do NOT describe the original person. The control video provides the motion; the prompt provides the character identity and style.
+
+**Good:**
+> A young Indian woman in a casual kurta performs a dynamic dance in a bright studio. She moves confidently, hitting each beat with sharp arm movements. The camera follows her motion from a medium shot. Audio: upbeat pop rhythm, room reverb.
+
+**Bad:**
+> Copy the dance from the Instagram reel. (Too vague -- the model needs specific character description.)
+
+### Limitations
+
+- Hands/fingers will have artifacts in hand-heavy choreography (LTX-2.3 limitation).
+- Identity is approximate during motion -- the character will resemble the anchor but not be pixel-perfect.
+- Max ~20s per window (481 frames). For longer trend videos, the control video is truncated or use sliding windows.
+- Preprocessing (DWPose, Depth Anything) adds ~30-60s before generation starts.
+- `yt-dlp` requires periodic updates for Instagram support: `pip install --upgrade yt-dlp`.
+
+### Pitfalls
+
+- **Instagram videos crash decord (CRITICAL).** Instagram's video encoding uses codec settings that crash WanGP's `decord` video reader with `DECORDError: avcodec_send_packet ... Error sending packet`. **Fix:** Always re-encode downloaded videos before passing to WanGP: `ffmpeg -i trend_source.mp4 -vcodec libx264 -acodec aac -pix_fmt yuv420p -r 24 -movflags +faststart trend_source_clean.mp4 -y`. The `copy_trend.py` script does this automatically.
+
+---
+
+## Intermediate Frame Injection (Keyframes)
+
+Place reference images at specific frame positions within a video. LTX-2.3 conditions generation on these keyframes and produces smooth transitions between them. This is separate from `image_start` (frame 0) and `image_end` (last frame) -- it handles the frames **in between**.
+
+### When to use
+
+- **Scene evolution within a single clip** -- e.g., outfit change at the midpoint, character moves from indoors to outdoors
+- **Start + end bookending** -- provide both the opening and closing composition so the model interpolates between them
+- **Multi-beat choreography** -- place a pose reference at each major beat so the character hits specific poses at specific times
+- **Storyboard-to-video** -- provide 3-5 storyboard frames and let the model fill in the motion between them
+
+### JSON fields
+
+| Field | Type | Description |
+|---|---|---|
+| `image_refs` | list of strings | Paths to keyframe images. Each pairs with a position in `frames_positions`. |
+| `frames_positions` | string | Space- or comma-separated tokens. Each is a **1-based frame number** (e.g., `80`) or `L` (last frame of window). Positions pair 1:1 with `image_refs` entries. |
+| `video_prompt_type` | string | Must include `F` for frame injection to activate. Without `F`, `frames_positions` is discarded. The UI preset is `KFI`. |
+| `image_end` | string | Optional end-frame image. Uses `E` in `image_prompt_type`. Separate from `image_refs` injection. |
+
+`input_video_strength` controls how strongly each injected keyframe influences generation (0.0-1.0). Higher = stricter adherence to the keyframe image, lower = more creative freedom.
+
+### Position format
+
+- **1-based integers**: `"1 80 160 240"` -- place keyframes at frames 1, 80, 160, 240
+- **`L` token**: last frame of the current sliding window
+- Positions are converted to 0-based internally by WanGP
+- List is truncated to `len(image_refs)` -- one position per ref image, extra positions are ignored
+
+### Constraints
+
+- `video_prompt_type` **must** include `F` -- without it, all injection fields are silently ignored
+- Cannot combine with HDR IC-LoRA (`&` in `video_prompt_type`)
+- Cannot combine with certain outpainting modes
+- Frame positions must be in range `[1, 3000]`
+- `image_start` (`S` in `image_prompt_type`) and `image_end` (`E`) are boundary frames handled separately -- they do NOT go in `image_refs`
+
+### Helper flags
+
+```bash
+python3 .../generate_video_config.py \
+    --prompt "A character walks from the bedroom to the garden..." \
+    --image-start /path/to/opening_frame.jpg \
+    --image-end /path/to/closing_frame.jpg \
+    --image-refs /path/to/midpoint_hallway.jpg /path/to/garden_gate.jpg \
+    --frames-positions "120 240" \
+    --video-length 361 \
+    --output-filename scene_transition \
+    --output-dir "$POSTS_DIR/..."
+```
+
+The helper auto-adds `F` to `video_prompt_type` when `--image-refs` is provided. It also auto-adds `E` to `image_prompt_type` when `--image-end` is provided.
+
+### Example: storyboard interpolation (4 keyframes over 15s)
+
+Given 4 storyboard images at evenly spaced positions across a 361-frame (15s) video:
+
+```bash
+python3 .../generate_video_config.py \
+    --prompt "Smooth camera push-in as the character transitions through four emotional beats..." \
+    --image-start /path/to/beat_1_calm.jpg \
+    --image-refs /path/to/beat_2_tension.jpg /path/to/beat_3_release.jpg \
+    --image-end /path/to/beat_4_resolve.jpg \
+    --frames-positions "120 240" \
+    --video-length 361 \
+    --output-filename storyboard_reel \
+    --output-dir "$POSTS_DIR/..."
+```
+
+This gives: frame 0 = `beat_1_calm.jpg` (via `--image-start`), frame 120 = `beat_2_tension.jpg`, frame 240 = `beat_3_release.jpg` (via `--image-refs` + `--frames-positions`), last frame = `beat_4_resolve.jpg` (via `--image-end`).
 
 ---
 
@@ -720,8 +1000,12 @@ Sets `video_length: 721` (30s) with `sliding_window_size: 481`. WanGP generates 
 "$WAN_PYTHON" "$WAN_APP_DIR/wgp.py" \
     --process "$POSTS_DIR/2026-05-02_1/video_generation.json" \
     --output-dir "$POSTS_DIR/2026-05-02_1" \
-    --compile --attention sage2 --profile 4 --fp16
+    --attention sage2 --profile 4
 ```
+
+**IMPORTANT: Never use `--compile` or `--fp16` on this setup.** `torch.compile()` crashes with `Unsupported` error from torch.dynamo on this PyTorch version. `--fp16` is unnecessary on the 4090 (BF16 works fine). Use only `--attention sage2 --profile 4`.
+
+**IMPORTANT: For multi-video batches, start jobs SEQUENTIALLY, not in parallel.** When generating 2+ videos in one session, do NOT launch multiple `wgp.py` processes at once. Start one, wait for completion (via `notify_on_complete`), send the video, THEN start the next. The GPU is shared and limited — parallel background launches risk OOM and confusion about which process is which. This is a user preference reinforced in session 2026-05-05.
 **CRITICAL:** Run this via `terminal(background=true)` with `notify_on_complete=true`. This starts a separate VM process that survives agent turn timeout.
 
 **CRITICAL: `--settings` does NOT trigger generation.** Passing `--settings /path/to/dir` loads the Gradio web UI on port 7860 — it is a web frontend, NOT a CLI execution flag. The process sits idle waiting for a web request. To actually generate, you MUST use `--process <path_to_video_generation.json>` (note: singular `--process`, not `--settings`). See [`references/wan-settings-vs-process-flag.md`](references/wan-settings-vs-process-flag.md) for the full breakdown.
@@ -734,12 +1018,23 @@ ps aux | grep "wgp.py" | grep -v grep
 ```
 If any wgp.py is running, DO NOT start a new one (24 GB VRAM / OOM risk). Wait for it to finish first.
 
-**Mandatory flags:**
-- `--image-start` is **required** for I2V (NOT `--image-ref` -- that flag does not exist).
-- `--aspect` is the preferred way to control orientation (`9:16` or `16:9`). It auto-sets resolution and template. You can still pass `--resolution "WxH"` directly to override.
-- `--output-filename` takes the basename without extension.
-- **NEVER use `--run` flag.** Always use the split Step A + Step B approach.
-- **`$WAN_APP_DIR` points at the `/app/` subdirectory** of the WanGP install (e.g., `/home/gowrav/pinokio/api/wan.git/app`), not the git repo root. `wgp.py` and `env/bin/python` live inside that `app/` directory.
+- **Mandatory flags:**
+  - `--image-start` is **required** for I2V (NOT `--image-ref` -- that flag does not exist).
+  - `--aspect` is the preferred way to control orientation (`9:16` or `16:9`). It auto-sets resolution and template. You can still pass `--resolution "WxH"` directly to override.
+  - `--output-filename` takes the basename without extension.
+  - **NEVER use `--run` flag.** Always use the split Step A + Step B approach.
+  - **`$WAN_APP_DIR` points at the `/app/` subdirectory** of the WanGP install (e.g., `/home/gowrav/pinokio/api/wan.git/app`), not the git repo root. `wgp.py` and `env/bin/python` live inside that `app/` directory.
+  - **NEVER use `--compile` flag with distilled-1.1 model.** It fails with `torch.compile()` throwing an `Unsupported` error from torch.dynamo. Always start WITHOUT `--compile` — use `TORCHINDUCTOR_FORCE_DISABLE=1` env var instead. Skipping compilation is actually faster (2m 39s observed vs expected 5-8 min with compilation).
+
+**CRITICAL: Do NOT use `--compile` flag on distilled-1.1.** The `torch.compile()` integration crashes with `torch.dynamo.Unsupported` on this setup. Remove `--compile` from the command entirely. Instead, set `TORCHINDUCTOR_FORCE_DISABLE=1` as an env var to skip compilation. The command should be:
+```bash
+set -a; source $PROFILE_ROOT/.env; set +a
+TORCHINDUCTOR_FORCE_DISABLE=1 "$WAN_PYTHON" "$WAN_APP_DIR/wgp.py" \
+    --process <config> \
+    --output-dir <output-dir> \
+    --attention sage2 --profile 4
+```
+Do NOT pass `--fp16` either — this can cause issues. The model uses BF16 by default which is fine for the 4090.
 
 The helper auto-applies the I2V crash-bypass (`image_mode: 0`, `image_prompt_type: "S"`, `input_video_strength: 1`) and prints a coherence reminder when `--image-start` is set. By default, `video_length` and `sliding_window_size` are both 481 (single-pass ~20s). To generate longer videos, pass `--video-length <frames>` with `--sliding-window-size 481` -- see "Extended Videos" section below.
 
@@ -754,7 +1049,11 @@ The helper supports two LTX-2.3 checkpoints via `--model <alias>`:
 | `gguf`  | Q6_K GGUF (16 GB) | 8 | Fastest | Day-to-day iteration, quick previews |
 | `distilled-1.1` (default) | Distilled v1.1 int8 (19 GB) | 8 | Fast | Need WanGP auto-HDR/outpaint/union-control LoRAs |
 
-> **Critical GGUF caveat:** The GGUF model's llama.cpp CUDA kernels are often unavailable on this setup (`[GGUF][llama.cpp CUDA] kernels unavailable, using fallback`). This causes GPU-incompatible inference falling back to CPU, making GGUF **slower than distilled-1.1** despite being "fastest" on paper. **If GPU utilization stays below 80% during GGUF generation, switch to distilled-1.1 immediately.** GGUF is worth trying only if you verify GPU utilization spikes to 90%+ within 30s of starting.
+> **Critical GGUF caveat #1:** The GGUF model's llama.cpp CUDA kernels are often unavailable on this setup (`[GGUF][llama.cpp CUDA] kernels unavailable, using fallback`). This causes GPU-incompatible inference falling back to CPU, making GGUF **slower than distilled-1.1** despite being "fastest" on paper. **If GPU utilization stays below 80% during GGUF generation, switch to distilled-1.1 immediately.** GGUF is worth trying only if you verify GPU utilization spikes to 90%+ within 30s of starting.
+
+> **Critical GGUF caveat #2:** On first run, GGUF downloads a ~6GB model file to the HF cache. During download, `wgp.py` produces **zero output** (no progress, no logs) for potentially **several minutes**. Do NOT kill the process — this is a download, not a hang. **Symptom:** Process shows `uptime_seconds > 120` with `output_preview: ""` or zero lines. **Verify:** check network activity with `ss -tnp | grep :443` (HuggingFace downloads over HTTPS) or just wait 2+ minutes. If you need to confirm, `ls -lh ~/.cache/huggingface/hub/ | grep -i gguf` shows the file being downloaded.
+
+> **Critical GGUF caveat #2:** On first use, the GGUF model downloads a ~6GB file to the HF cache. During download, `wgp.py` produces **zero output** (no progress, no logs) for potentially several minutes. Do NOT kill the process — this is a download, not a hang. Verify by checking disk I/O (`iotop` or `dmesg | tail`) or by waiting 2+ minutes. If you need to check, `ls -lh ~/.cache/huggingface/hub/ | grep -i gguf` shows the file being downloaded.
 
 > **Benchmark data (RTX 4090, 720x1280, 20s video):**
 - **distilled-1.1** (8 steps): ~3-4 min gen, ~5-8 min first run (TorchInductor compile), ~3-4 min cached re-run
@@ -795,7 +1094,29 @@ When the helper prints `[generate_video_config] coherence reminder:`, verify bef
 
 ## Operational rules
 
-- **Sequential only.** Never run two `wgp.py` jobs at once (24 GB VRAM / OOM risk).
+- **Parallel = instant OOM cascade for 3+ processes (CRITICAL).** Launching 3+ `wgp.py` jobs simultaneously crashes all with `exit code -9` (SIGKILL) at `Pinning data of 'transformer' to reserved RAM`. Each distilled-1.1 process uses ~7GB VRAM (~14GB for 2 processes, ~21GB for 3). **2 processes CAN run in parallel on a 24GB GPU** (confirmed: 14GB used, 100% GPU, both generated successfully). **3 processes always OOMs.** Rule: MAX 2 `wgp.py` processes at a time. Always verify nothing else is running before starting new jobs. This is a hardware limit, not a preference.
+
+- **Process wrapper stdout unreliable. CRITICAL: The Hermes terminal wrapper sometimes swallows ALL stdout from wgp.py**, showing `total_lines: 0` or `output_preview: ""` even when the process IS actively generating. The preview may also freeze on old output for 15+ minutes. **Do NOT use process output to diagnose hangs.** Instead:
+  1. Check output files: `ls -lh <post-dir>/*.mp4` — new files appearing means progress
+  2. Check GPU: `nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv,noheader` — >0% utilization means working
+  3. Check process: `ps aux | grep "wgp.py" | grep -v grep` — process exists
+  If GPU shows >0% utilization AND a wgp.py process exists, generation IS happening. The "0 lines" output is a wrapper limitation, not a failure.
+
+- **Frame-to-duration math.** LTX-2.3 runs at 24 fps. Conversion:
+  - 20 seconds = 480 frames (standard: 481)
+  - 25 seconds = 600 frames (standard: 601)
+  - 30 seconds = 720 frames (standard: 721)
+  - Formula: `frames = round(seconds × 24) + 1`
+  - Valid LTX2 frame counts satisfy `(n-1) % 8 == 0`. WanGP auto-aligns if not exact, but use the standard values above.
+  - **User preference (session 2026-05-06):** Avatar intro dialogues target 30s (721 frames) for full dialogue + visual closing beat. CTA must be the absolute last quoted text, followed only by a visual closing beat (wave, smile, camera pull-back) with ZERO speech after it.
+
+- **Frame-to-duration math.** LTX-2.3 runs at 24 fps. Conversion:
+  - 20 seconds = 480 frames (standard: 481)
+  - 25 seconds = 600 frames (standard: 601)
+  - 30 seconds = 720 frames (standard: 721)
+  - Formula: `frames = round(seconds × 24) + 1`
+  - Valid LTX2 frame counts satisfy `(n-1) % 8 == 0`. WanGP auto-aligns if not exact, but use the standard values above.
+  - **User preference:** Avatar intro dialogues should target 30s (721 frames) for full dialogue + visual closing beat. The CTA line must be the absolute last quoted text, followed only by a visual closing beat (wave, smile, camera pull-back) with NO speech.
 - **NEVER use `--run` flag.** Always split into Step A (config write) + Step B (background execution). The `--run` flag blocks the terminal call and is killed by agent turn timeout during the 5-6 minute generation.
 - **Background execution.** Always run Step B via `terminal(background=true)` with `notify_on_complete=true`. The GPU process runs on the VM and survives agent turn timeout. Use `process(session_id).wait()` to block until completion if needed.
 - **WanGP Python.** Always use `$WAN_PYTHON` (= `$WAN_APP_DIR/env/bin/python`) — system `python3` lacks PyTorch and will fail silently.
@@ -804,9 +1125,12 @@ When the helper prints `[generate_video_config] coherence reminder:`, verify bef
 
 ### Polling and notification rules
 
+### Polling and notification rules
+
 - **Primary: use `notify_on_complete=true`.** This sends a single notification when the GPU job finishes. No polling needed. This is the recommended approach.
 - **Fallback: use the monitor script for timing.** The monitor script reports the process uptime itself. Just check its output for the "RUNNING" status + elapsed time. Act on what it tells you.
 - **Never try to track time yourself.** The agent CANNOT reliably count elapsed time between turns. The monitor script reads the process uptime directly. Use its output. Do not try to track start time yourself.
+- **CRITICAL: Do not poll repeatedly.** After starting a video gen via background=true, wait for `notify_on_complete=true` notification. Do NOT poll the monitor script repeatedly or send intermediate "still running..." messages. User prefers minimal interruption — if it's processing, it's processing. The only exceptions are: (a) check output files exist (for error diagnosis), (b) check GPU utilization (for diagnosis), or (c) poll at most ONCE every 120s if you need to verify something. Do not send any status updates during normal operation.
 
 ## Pitfalls
 
@@ -837,6 +1161,8 @@ When the helper prints `[generate_video_config] coherence reminder:`, verify bef
 - **Multi-LoRA CLI bug (filenames).** When using `--activated-loras` with multiple LoRAs, the helper generates a JSON with the filenames concatenated into a single string in the array (e.g., `["Pixar_Toon.safetensors LTX2.3_Crisp_Enhance.safetensors"]`) instead of separate entries. **Always verify after Step A:** `cat <post-dir>/video_generation.json | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['activated_loras'])"`. If it shows one concatenated string, run `python3 "$PROFILE_SKILLS/wan2gp-video-generation/scripts/fix_multi_lora.py" <post-dir>/video_generation.json` to auto-fix it.
 - **Argparse list unpacking bug for --activated-loras.** The `--activated-loras` flag uses `nargs="*"` in argparse, which means it expects multiple command-line arguments. If you pass the LoRA filenames as a single string or a Python list object (rather than unpacking), argparse consumes the entire list as ONE argument, which then gets concatenated. **Fix:** Always unpack the list: `*LORA_FILES` or `" ".join(LORA_FILES)`. When building subprocess commands in Python, pass the command as a **list** (not `shell=True` string) to avoid shell splitting issues.
 - **LoRA multipliers format (CRITICAL).** WanGP's internal `preparse_loras_multipliers` function uses `split(" ")` (space-splitting), NOT semicolon-splitting. Passing multipliers as `;`-separated (e.g., `"1.5;1.2;0.5"`) causes them to be misinterpreted as **phase-specific** multipliers for a single LoRA, leading to **silent failures** — the script runs but LoRAs don't apply. **Always use space-separated values:** `"1.5 1.2 0.5"`. When passing via `--loras-multipliers` in a subprocess, also unpack with `*` or use `shlex.quote()`.
+- **LoRA multiplier 1.8 for Crisp_Enhance (confirmed working, session 2026-05-05).** Crisp_Enhance at 1.8 produced stronger sharpening than default 0.5. The format "1.5 1.8" with Pixar_Toon @ 1.5 and Crisp_Enhance @ 1.8 works when both are in activated_loras. When removing Crisp_Enhance, reduce to single multiplier: "1.5" with only Pixar_Toon in the array.
+- **Pixar_Toon alone @ 1.5 (user preference, session 2026-05-05).** For character introduction / talking-head videos, using only Pixar_Toon.safetensors at 1.5 (no Crisp_Enhance, no other LoRAs) produces good results. This is the recommended minimal LoRA setup for Pixar-style character content.
 - **Shell quoting when building command via Python subprocess.** The video prompt **must** contain double quotes around dialogue lines. When building the `generate_video_config.py` command inside Python code (e.g. `subprocess.run(command, shell=True)`), the shell interprets those dialogue quotes as string delimiters and splits the argument, causing "unrecognized arguments" errors. **Fix:** either use `subprocess.run([...])` with the command as a **list** (bypasses shell parsing entirely), or wrap the prompt in `shlex.quote(prompt)` before concatenating into the shell string.
 - **Style LoRAs need high multipliers.** Style/aesthetic LoRAs (Pixar_Toon, Claymation, Fantasy_*, CozyFelt) at default 0.5 multiplier produce **no visible visual change**. Use 0.8–1.5 for style LoRAs. See [`references/ltx2-3-loras.md`](references/ltx2-3-loras.md) for recommended ranges.
 - **Wrong Python in batch scripts.** When writing batch orchestration scripts that call `generate_video_config.py` or `generate_asset.py` via `subprocess.run`, always use `$WAN_PYTHON` instead of system `python3`. System Python lacks PyTorch and will fail silently. See `wan2gp-image-generation:references/execution-pitfalls.md` for full details.
@@ -858,9 +1184,14 @@ When the helper prints `[generate_video_config] coherence reminder:`, verify bef
 - **LTX-2.3 per-window frame cap is 481 for reliable generation.** The `sliding_window_size` should be 481 (20s @ 24fps). The WanGP handler allows up to 501 but values above 481 **will crash** during execution with `Sliding Window Size must be at most 481`. **The total `video_length` can be HIGHER than 481** -- when `video_length > sliding_window_size`, WanGP automatically generates multiple overlapping windows and stitches them. See the "Extended Videos" section. For single-pass generation, keep both `video_length` and `sliding_window_size` at 481. **Session evidence (2026-05-05):** Job using 501 crashed immediately. Confirmed: hard cap is 481.
 
 - **`monitor_video_gen.py` etime parse bug.** The `parse_etime` function in `monitor_video_gen.py` had a bug on line 37 where `h, m = 0, int(parts[0]), int(parts[1])` tried to unpack 3 values into 2 variables, causing `ValueError: too many values to unpack`. **Fix:** changed to `h, m, s = int(parts[0]), int(parts[1]), 0`. If you encounter this error on a fresh checkout, apply the same fix. Patch applied to skill as of 2026-05-05.
+- **Prompt ends before video length — loops back to start.** When `video_length` exceeds the spoken content in the prompt, the model hits the end of the text and starts repeating from the beginning. This is the #1 cause of garbled extended videos. **Fix:** Always end with a **visual closing beat** (camera pull-back, wave, zoom-out, smirk) — NO quoted dialogue after the CTA. The last ~10s of a 30s video should contain zero speech, only physical action and camera movement. This gives the model text to render for the final frames. **Pre-flight checklist:** Count your quoted dialogue lines — they should occupy roughly the first 65-75% of the video duration. The remaining time must be described as physical action only (no quotes).
+
 - **`$CHARACTER_ASSETS_MANIFEST` (when using `--ref-assets` in video).** The video config helper imports `asset_manifest.py`, which is now a strict consumer of `$CHARACTER_ASSETS_MANIFEST`. If the env var is missing the script exits immediately with `[env] required env var 'CHARACTER_ASSETS_MANIFEST' not set`. Source `$PROFILE_ROOT/.env` to fix.
+
+- **Sliding window T2V text-mapping reset (CRITICAL).** When generating extended videos via sliding window (`video_length > sliding_window_size`), **each window re-reads the full prompt from the beginning**. The text-to-frame mapping does NOT carry across windows. Symptoms: after ~20s the audio loops/restarts (e.g., "Hi I am..." again), or goes silent. Root cause: LTX-2.3 maps dialogue linearly across frames, but each sliding window is a fresh generation. **Solution for avatar intros:** DO NOT use sliding window. Keep `video_length = 481` (20s) and fit the full prompt within that duration. **If you must exceed 20s with dialogue:** Use movie pipeline `continue_from` — Scene 1 (0-20s) full dialogue via T2V, Scene 2 (20-30s) visual closing beat via `--video-source` with a separate prompt. **Critical:** For 481-frame T2V prompts, the CTA line must be the **absolute last text** in the prompt. No visual descriptions, audio directions, or anything after the CTA. Even one word after the CTA causes audio to loop or go silent during remaining frames. Session 2026-05-05 confirmed this extensively. See `references/sliding-window-text-mapping-reset.md` for details.
 - **LTX-2.3 I2V cannot preserve exact visual identity during motion.** LTX-2.3 REGENERATES subjects during motion rather than animating exact anchor pixels. Even with zero LoRAs, high guidance scale (5+), simplified prompts ("same exact idols"), and explicit negative prompts ("transform, change style, different look, new style, fantasy art, cartoon, anime, different appearance, blue skin, different sculpture"), the model will reinterpret/transform subjects — especially complex subjects like religious idols, sculptures, or anything with detailed ornamentation. This is an architectural limitation, not a config issue. **Session evidence (2026-05-02, Radha-Krishna idols):** 3 full iterations attempted: (1) Fantasy_Realism LoRA at 1.0 → complete style transform. (2) No LoRA, negative prompt targeting style change, guidance 6 → STILL transformed. (3) No LoRA, negative prompt, guidance 5, ultra-simple prompt ("exact same colors, same appearance, same golden marble style") → STILL transformed, model reinterpreted the deities. All 3 failed to preserve exact appearance. **Confirmed: works for simple subjects** (single cat on sunlit floor — cat identity preserved across steps). The failure is specifically with complex ornamented subjects (religious icons, detailed sculptures, heavily costumed characters). **Workarounds:** (1) Frame interpolation between manually crafted keyframes — the exact anchor pixel is preserved because it IS a frame. (2) Use a different I2V model (e.g., Mochi) if exact preservation is critical. (3) Composite a static PNG onto a blank background animation in post. (4) Accept approximate preservation — output may still be beautiful even if not pixel-perfect. **Rule of thumb:** Simple subjects (animals, people in basic poses) → I2V works fine. Complex ornamented subjects (religious icons, detailed sculptures, heavily costumed characters) → I2V will transform them. Use alternatives for the latter.
-- **Config file path mismatch after Step A.** The `generate_video_config.py` helper writes `video_generation.json` using `$POSTS_DIR` (which resolves to `$PROFILE_HOME/posts`). If you construct the path manually in your Step B command (e.g., hardcoding or deriving from `$PROFILE_SKILLS`), it may not match the actual location. **Always verify the config exists** after Step A: `ls "$POSTS_DIR/2026-05-05_2/video_generation.json"` — if it does not exist, echo `$POSTS_DIR` to see the actual resolved path. **Session evidence (2026-05-05):** First wgp.py run failed with `[ERROR] File not found: /home/gowrav/.hermes/profiles/gvs/posts/...` because `$POSTS_DIR` resolved to `/home/gowrav/.hermes/profiles/gvs/home/posts/` (with a `home` subdirectory). Had to re-run Step B with the correct `$POSTS_DIR`. **Fix:** Always use `"$POSTS_DIR/..."` (unquoted var expansion) in both Step A and Step B, never hardcode or recompute the path.
+- **Configuration Errors:** If generation fails immediately, check `video_generation.json` using `references/json-config-structure.md`. Common issues are missing `model_type` within the task block or empty `prompt` fields.
+- **Multiple Character Inputs:** When using multiple I2V anchors, provide them as a JSON list in `image_start` as shown in `references/json-config-structure.md`.
 - **Orphaned wgp.py can deadlock GPU → system hang.** When a Hermes session ends mid-execution (timeout, Telegram disconnect, agent crash), background `wgp.py` GPU processes are left orphaned. These processes can enter a hung/deadlocked state in the NVIDIA driver (`D` state / uninterruptible sleep). Processes in `D` state CANNOT be killed with `kill -9`. When the GPU driver is stuck, the entire system becomes unresponsive — no new terminal sessions, no SSH, no Ctrl-Alt-F1. The ONLY recovery is a hard reboot. **Prevention:** (1) Always check for orphans BEFORE starting a new job: `ps aux | grep "wgp.py" | grep -v grep`. (2) If orphaned wgp.py is found, try `kill -15 <pid>` first (graceful), wait 5s, then `kill -9 <pid>`. If `kill -9` does nothing or returns "Cannot send process signal", the process is in D state and the GPU is already deadlocked. (3) After killing orphans, run `nvidia-smi` — if it hangs/fails, the GPU driver is deadlocked and a reboot is required. **Recovery when GPU is deadlocked:** Hard reboot is the only option. After reboot, check `journalctl -b -1` — if logs end abruptly with no shutdown sequence, this confirms a hard crash from GPU deadlock. See `references/orphan-process-hang.md` for the May 3 crash case study. **Session evidence (2026-05-03):** Fantasy reel batch generation session ended at 01:50 AM. Orphaned wgp.py from mid-execution batch 2 deadlocked GPU. System had zero logs between May 3 01:50 and May 4 10:08 — the journal never flushed because the crash was immediate hardware-level. `dmesg` empty, no OOM killer, no kernel panic. Confirmed: force-reboot resolved it.
 
 - **Continue-from OOM on second-pass denoising (exit code -9).** When a scene uses `continue_from`/`--video-source`, WanGP's second-pass denoising loads BOTH the source video's latent representation AND the new scene's data into VRAM simultaneously. On a 24 GB GPU, the 6th scene of a continue_from chain can OOM (SIGKILL / exit -9) during the second pass even though all prior scenes completed fine. **Pattern:** Scenes 1-5 complete without issue, scene 6+ fails with `[Sliding Window X/Y] - Denoising Second Pass` then `exit code -9`. **Mitigation:** If scene N fails, re-run the pipeline — it will resume from scene N (the GPU has freed up since the crash). If the same scene keeps OOMing, split the movie into two batches (scenes 1-N and scenes N+end), deliver the last frame of batch 1, then generate batch 2 separately.
@@ -902,11 +1233,14 @@ posts/2026-05-02_7/
 
 ## Supporting references
 
-- [`references/model_configs.md`](references/model_configs.md) — Model checkpoint details, guidance scale advice, flag precedence.
-- [`references/ltx2-3-loras.md`](references/ltx2-3-loras.md) — Full LoRA inventory, multiplier ranges, feature-gated behavior.
+- [`references/telegram-delivery-pattern.md`](references/telegram-delivery-pattern.md) — Optimized delivery for Telegram with chunked previews and retry logic.
+- [`references/telegram-timeout-fix.md`](references/telegram-timeout-fix.md) — Solving `read timeout exceeded` on large media files.
+- **CRITICAL: `image_start`/`image_end` must be FILE PATH STRINGS, not booleans.** When building a video generation JSON config programmatically, the LTX-2.3 I2V template has `image_start` and `image_end` keys that expect **absolute file path strings** (e.g., `/path/to/anchor.jpg`), NOT boolean `true`/`false`. If you write `"image_start": true` / `"image_end": true`, WanGP's loader throws `[Warning: Invalid filename for key 'image_start']. Skipping.` and then `[ERROR] You must provide a Start Image` — even though the type in the template JSON says `bool`. The loader silently drops booleans and expects strings. The working v2 config had them as path strings; any programmatic config builder must produce strings, not booleans.
+
+**Session evidence (2026-05-06):** Video gen failed with exit 1 because config had `"image_start": true` / `"image_end": true`. Fixed by using `"image_start": "/path/to/start.jpg"` and `"image_end": "/path/to/end.jpg"` (file path strings).
 - [`references/telegram-timeout-fix.md`](references/telegram-timeout-fix.md) — Diagnosis of the Telegram agent-turn timeout problem with `--run`.
 - [`references/orphan-process-hang.md`](references/orphan-process-hang.md) — GPU deadlock case study from May 3.
-- [`references/video-delivery-pattern.md`](references/video-delivery-pattern.md) — Video delivery workflow.
+- [references/json-config-structure.md](references/json-config-structure.md) — Reference for required JSON task structure (model_type, image_start arrays).
 - [`references/sliding-window-output-files.md`](references/sliding-window-output-files.md) — Extended video output file pattern (do NOT concatenate).
 - [`references/wan-app-dir-discovery.md`](references/wan-app-dir-discovery.md) — WanGP app directory discovery.
 - [`references/telegram-delivery-pattern.md`](references/telegram-delivery-pattern.md) — Telegram delivery pattern.

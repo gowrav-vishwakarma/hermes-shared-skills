@@ -34,6 +34,44 @@ Usage (Continue from previous video):
         --output-filename scene_02_video \\
         --output-dir /home/.../scene_02
 
+Usage (Trend copy -- transfer motion from a reference video to a character):
+    python3 generate_video_config.py \\
+        --prompt "A young woman performs the dance..." \\
+        --video-guide /home/.../downloaded_trend.mp4 \\
+        --image-start /home/.../character_anchor.jpg \\
+        --video-prompt-type OVG \\
+        --output-filename trend_copy_v1 \\
+        --output-dir /home/.../output
+
+Usage (Trend copy with audio sync -- dance to the source video's music):
+    python3 generate_video_config.py \\
+        --prompt "A young woman dances energetically to the beat..." \\
+        --video-guide /home/.../trend_source_clean.mp4 \\
+        --image-start /home/.../character_anchor.jpg \\
+        --video-prompt-type OVG \\
+        --audio-from-control-video \\
+        --output-filename trend_dance_v1 \\
+        --output-dir /home/.../output
+
+Usage (External audio conditioning -- sync to a specific soundtrack):
+    python3 generate_video_config.py \\
+        --prompt "The character dances to the rhythm..." \\
+        --image-start /home/.../character_anchor.jpg \\
+        --audio-guide /home/.../music_track.wav \\
+        --output-filename dance_reel \\
+        --output-dir /home/.../output
+
+Usage (Intermediate frame injection -- keyframes at specific positions):
+    python3 generate_video_config.py \\
+        --prompt "The character transitions through emotional beats..." \\
+        --image-start /home/.../opening.jpg \\
+        --image-refs /home/.../midpoint.jpg /home/.../climax.jpg \\
+        --frames-positions "120 240" \\
+        --image-end /home/.../closing.jpg \\
+        --video-length 361 \\
+        --output-filename keyframe_reel \\
+        --output-dir /home/.../output
+
 Add `--run` to also execute `wgp.py --process` from the WanGP venv.
 """
 
@@ -109,6 +147,15 @@ MODEL_CHOICES = sorted(MODEL_CONFIGS)
 LTX2_LATENT_SIZE = 8
 LTX2_FPS = 24
 
+VALID_VIDEO_PROMPT_TYPES = {
+    "PVG": "Transfer Human Motion",
+    "OVG": "Transfer Human Motion With Pose Alignment",
+    "DVG": "Transfer Depth",
+    "EVG": "Transfer Canny Edges",
+    "VG": "LTX2 Raw Format / Control Video for IC LoRA",
+    "KFI": "Inject Frames (Keyframe Injection)",
+}
+
 
 def _align_frames(n: int, latent_size: int = LTX2_LATENT_SIZE) -> int:
     """Snap frame count to the nearest valid value (must satisfy (n-1) % latent_size == 0)."""
@@ -124,7 +171,10 @@ def _compute_window_count(video_length: int, window_size: int,
 
 def resolve_template(template_arg: str | None, image_start: str | None,
                      aspect: str | None = None,
-                     video_source: str | None = None) -> Path:
+                     video_source: str | None = None,
+                     video_guide: str | None = None,
+                     image_end: str | None = None,
+                     image_refs: list | None = None) -> Path:
     """Pick a template file based on shorthand, path, anchor/video presence, or aspect."""
     if template_arg:
         candidate = Path(template_arg)
@@ -141,7 +191,8 @@ def resolve_template(template_arg: str | None, image_start: str | None,
             f"Aliases: {sorted(TEMPLATE_ALIASES)}"
         )
     is_landscape = aspect == "16:9"
-    if image_start or video_source:
+    has_image_input = image_start or video_source or video_guide or image_end or image_refs
+    if has_image_input:
         return TEMPLATES_DIR / ("ltx-2.3-i2v-16x9.json" if is_landscape else "ltx-2.3-i2v.json")
     return TEMPLATES_DIR / ("ltx-2.3-t2v-16x9.json" if is_landscape else "ltx-2.3-t2v.json")
 
@@ -204,6 +255,11 @@ def build_settings(template_path: Path, args: argparse.Namespace) -> dict:
             "[generate_video_config] --video-source and --image-start are "
             "mutually exclusive. Use one or the other."
         )
+    if args.video_source and args.video_guide:
+        raise SystemExit(
+            "[generate_video_config] --video-source and --video-guide are "
+            "mutually exclusive. Use one or the other."
+        )
 
     if args.video_source:
         settings["image_mode"] = 0
@@ -222,6 +278,92 @@ def build_settings(template_path: Path, args: argparse.Namespace) -> dict:
         settings["input_video_strength"] = 1
         settings["image_start"] = args.image_start
 
+    # --- End frame ---
+    if args.image_end:
+        ipt = settings.get("image_prompt_type", "")
+        if "E" not in ipt:
+            settings["image_prompt_type"] = ipt + "E"
+        settings["image_end"] = args.image_end
+
+    # --- Intermediate frame injection (keyframes at specific positions) ---
+    if args.image_refs:
+        settings["image_refs"] = args.image_refs
+        vpt_cur = settings.get("video_prompt_type", "")
+        if "F" not in vpt_cur:
+            settings["video_prompt_type"] = "KFI" if not vpt_cur else vpt_cur + "F"
+        if args.frames_positions:
+            positions_tokens = args.frames_positions.replace(",", " ").split()
+            if len(positions_tokens) > len(args.image_refs):
+                raise SystemExit(
+                    f"[generate_video_config] --frames-positions has "
+                    f"{len(positions_tokens)} tokens but only "
+                    f"{len(args.image_refs)} --image-refs provided. "
+                    f"Each position needs a corresponding image ref."
+                )
+            for tok in positions_tokens:
+                if tok.upper() == "L":
+                    continue
+                if not tok.isdigit() or int(tok) < 1 or int(tok) > 3000:
+                    raise SystemExit(
+                        f"[generate_video_config] invalid frame position "
+                        f"'{tok}'. Must be integer 1-3000 or 'L'."
+                    )
+            settings["frames_positions"] = args.frames_positions
+        else:
+            raise SystemExit(
+                "[generate_video_config] --image-refs requires "
+                "--frames-positions to specify where each keyframe goes."
+            )
+        vpt_final = settings.get("video_prompt_type", "")
+        if "&" in vpt_final:
+            raise SystemExit(
+                "[generate_video_config] frame injection (F) cannot be "
+                "combined with HDR IC-LoRA (&) in video_prompt_type."
+            )
+
+    # --- Control Video (motion/pose/depth transfer from a guide video) ---
+    if args.video_guide:
+        vpt = args.video_prompt_type
+        if vpt not in VALID_VIDEO_PROMPT_TYPES:
+            raise SystemExit(
+                f"[generate_video_config] --video-prompt-type must be one of "
+                f"{list(VALID_VIDEO_PROMPT_TYPES)} when --video-guide is set, "
+                f"got {vpt!r}."
+            )
+        if "O" in vpt and not args.image_start:
+            raise SystemExit(
+                "[generate_video_config] Aligned Pose Transfer (OVG) requires "
+                "--image-start. Provide a character anchor image."
+            )
+        settings["video_guide"] = args.video_guide
+        settings["video_prompt_type"] = vpt
+        settings["denoising_strength"] = args.denoising_strength
+        settings["keep_frames_video_guide"] = args.keep_frames_video_guide
+
+    # --- Audio conditioning ---
+    if args.audio_guide and args.audio_from_control_video:
+        raise SystemExit(
+            "[generate_video_config] --audio-guide and --audio-from-control-video "
+            "are mutually exclusive. Use one or the other."
+        )
+
+    if args.audio_from_control_video:
+        if not args.video_guide:
+            raise SystemExit(
+                "[generate_video_config] --audio-from-control-video requires "
+                "--video-guide. Provide a control video to extract audio from."
+            )
+        vpt_cur = settings.get("video_prompt_type", "")
+        if "V" not in vpt_cur:
+            raise SystemExit(
+                "[generate_video_config] --audio-from-control-video requires 'V' "
+                f"in video_prompt_type, got '{vpt_cur}'. Use OVG, PVG, DVG, EVG, or VG."
+            )
+        settings["audio_prompt_type"] = "K"
+    elif args.audio_guide:
+        settings["audio_prompt_type"] = "A"
+        settings["audio_guide"] = args.audio_guide
+
     return settings
 
 
@@ -237,6 +379,23 @@ def main() -> int:
         help="Absolute path to anchor JPG/PNG (auto-switches template to I2V).",
     )
     ap.add_argument(
+        "--image-end", default=None,
+        help="Absolute path to end-frame image. Auto-adds 'E' to image_prompt_type. "
+             "The model will guide the video to end at this composition.",
+    )
+    ap.add_argument(
+        "--image-refs", nargs="+", default=None,
+        help="One or more paths to keyframe images for intermediate frame injection. "
+             "Each pairs 1:1 with a position in --frames-positions. Auto-adds 'F' "
+             "to video_prompt_type.",
+    )
+    ap.add_argument(
+        "--frames-positions", default=None,
+        help="Space- or comma-separated frame positions for --image-refs. "
+             "Each token is a 1-based frame number (e.g., '80 160 240') or 'L' "
+             "(last frame of window). Required when --image-refs is set.",
+    )
+    ap.add_argument(
         "--video-source", default=None,
         help="Absolute path to video to continue from (sets image_prompt_type='V'). "
              "Mutually exclusive with --image-start.",
@@ -244,6 +403,30 @@ def main() -> int:
     ap.add_argument(
         "--keep-frames-video-source", default="",
         help="Frames to keep from source video (empty=all, negative=truncate from end).",
+    )
+    ap.add_argument(
+        "--video-guide", default=None,
+        help="Absolute path to a control video for motion/pose/depth transfer. "
+             "Used with --video-prompt-type to set the transfer mode. "
+             "Can coexist with --image-start (recommended for OVG). "
+             "Mutually exclusive with --video-source.",
+    )
+    ap.add_argument(
+        "--video-prompt-type", default="OVG",
+        choices=list(VALID_VIDEO_PROMPT_TYPES),
+        help="Control video processing mode. "
+             "PVG=Transfer Human Motion, OVG=Aligned Pose (needs --image-start), "
+             "DVG=Transfer Depth, EVG=Transfer Canny Edges, "
+             "VG=Raw Format / IC LoRA. Default: OVG.",
+    )
+    ap.add_argument(
+        "--denoising-strength", type=float, default=1.0,
+        help="Denoising strength for control video mode (0.0-1.0). "
+             "1.0=full regeneration, lower values blend more with original. Default: 1.0.",
+    )
+    ap.add_argument(
+        "--keep-frames-video-guide", default="",
+        help="Frames to keep from the control video guide (empty=all).",
     )
     ap.add_argument("--output-filename", required=True,
                     help="WanGP `output_filename` (basename, no extension).")
@@ -273,6 +456,19 @@ def main() -> int:
                     help="num_inference_steps override (template default 8-10).")
     ap.add_argument("--guidance-scale", type=float, default=None)
     ap.add_argument("--audio-scale", type=float, default=None)
+    ap.add_argument(
+        "--audio-guide", default=None,
+        help="Absolute path to an audio file (.wav/.mp3) to condition video on. "
+             "Auto-sets audio_prompt_type='A'. The model syncs motion and lip "
+             "movements to this audio.",
+    )
+    ap.add_argument(
+        "--audio-from-control-video", action="store_true",
+        help="Extract audio from --video-guide and use it as audio conditioning. "
+             "Auto-sets audio_prompt_type='K'. Ideal for trend copy reels where "
+             "the character should dance/lip-sync to the source video's music. "
+             "Requires --video-guide with 'V' in --video-prompt-type.",
+    )
     ap.add_argument("--loras-multipliers", default=None)
     ap.add_argument("--activated-loras", nargs="*", default=None)
     ap.add_argument("--no-loras", action="store_true",
@@ -296,7 +492,8 @@ def main() -> int:
         args.resolution = ASPECT_RESOLUTIONS.get(args.aspect, "720x1280")
 
     template_path = resolve_template(args.template, args.image_start, args.aspect,
-                                     args.video_source)
+                                     args.video_source, args.video_guide,
+                                     args.image_end, args.image_refs)
     settings = build_settings(template_path, args)
 
     out_path = out_dir / "video_generation.json"
@@ -308,6 +505,8 @@ def main() -> int:
     vlen = settings["video_length"]
     wsize = settings["sliding_window_size"]
     woverlap = settings["sliding_window_overlap"]
+    vpt = settings.get("video_prompt_type", "")
+    vpt_label = VALID_VIDEO_PROMPT_TYPES.get(vpt, "none") if vpt else "none"
     print(
         f"[generate_video_config] model={args.model} template={template_path.name} "
         f"resolution={settings['resolution']} "
@@ -317,6 +516,8 @@ def main() -> int:
         f"sliding_window_overlap={woverlap} "
         f"image_start={'yes' if args.image_start else 'no'} "
         f"video_source={'yes' if args.video_source else 'no'} "
+        f"video_guide={'yes' if args.video_guide else 'no'} "
+        f"video_prompt_type={vpt or 'none'} ({vpt_label}) "
         f"loras=[{loras_str}]",
         file=sys.stderr,
     )
@@ -348,13 +549,8 @@ def main() -> int:
             "motion), not re-describe the source video's content.",
             file=sys.stderr,
         )
-    if args.image_start:
-        # Anchor <-> Reel coherence reminder. LTX-2.3 in I2V mode decodes from
-        # the anchor as frame 0, so the prompt opening MUST mirror the anchor
-        # composition (same INT/EXT, same pose, same wardrobe, same light) and
-        # MUST NOT contain hard cuts. See video-create-workflow SKILL.md ->
-        # "Anchor <-> Reel coherence" and wan2gp-video-generation SKILL.md ->
-        # "Opening frame must mirror your I2V anchor (no hard cuts)".
+    if args.image_start and not args.video_guide:
+        # Anchor <-> Reel coherence reminder (only for pure I2V, not control video).
         print(
             "[generate_video_config] coherence reminder: image_start is set, so "
             "LTX-2.3 will decode from the anchor as frame 0. Verify the prompt "
@@ -362,6 +558,43 @@ def main() -> int:
             "wardrobe, light source, view through windows) and contains NO hard "
             "cuts (no 'CUT TO', 'cuts to ...', 'JUMP CUT', 'MEANWHILE'). Reveal "
             "new elements via camera moves only.",
+            file=sys.stderr,
+        )
+    if args.video_guide:
+        vpt = settings.get("video_prompt_type", "")
+        vpt_label = VALID_VIDEO_PROMPT_TYPES.get(vpt, vpt)
+        print(
+            f"[generate_video_config] CONTROL VIDEO mode: {vpt_label} ({vpt}). "
+            f"Motion/structure from the guide video will be transferred. "
+            f"denoising_strength={settings.get('denoising_strength', 1.0)} "
+            f"(1.0=full regeneration).",
+            file=sys.stderr,
+        )
+    apt = settings.get("audio_prompt_type", "")
+    if apt == "K":
+        print(
+            "[generate_video_config] AUDIO: using control video's audio track "
+            "(audio_prompt_type='K'). Character will sync to the video_guide's "
+            "music/speech.",
+            file=sys.stderr,
+        )
+    elif apt == "A":
+        print(
+            f"[generate_video_config] AUDIO: external audio file conditioning "
+            f"(audio_prompt_type='A'). audio_guide={args.audio_guide}",
+            file=sys.stderr,
+        )
+    if args.image_end:
+        print(
+            f"[generate_video_config] END FRAME: image_end is set, model will "
+            f"guide video toward this composition at the last frame.",
+            file=sys.stderr,
+        )
+    if args.image_refs:
+        print(
+            f"[generate_video_config] FRAME INJECTION: {len(args.image_refs)} "
+            f"keyframe(s) at positions [{args.frames_positions}]. "
+            f"video_prompt_type={settings.get('video_prompt_type', '')}.",
             file=sys.stderr,
         )
 
