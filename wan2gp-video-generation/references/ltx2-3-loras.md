@@ -103,6 +103,23 @@ Or edit directly via Python/JSON before running `wgp.py`. Never trust multi-LoRA
 |---|---|---|
 | `ltx23_zoomout_z00m047.safetensors` | 402MB | Zoom-out camera effect |
 | `ltx23__demopose_d3m0p0s3.safetensors` | 402MB | Demo pose control (experimental) |
+| `LTX2.3-IC-LORA-Dual-Character.safetensors` | ? | Handles two distinct characters in the same frame. Prevents merging/artifacts when scene has 2 characters. Use at 0.5 multiplier alongside a style LoRA. |
+
+### Two-character scene setup
+
+When the prompt calls for two distinct characters (people, animals, creatures):
+
+**Always stack a style LoRA with Dual-Character LoRA:**
+- Style LoRA (e.g., `Pixar_Toon.safetensors`) at 1.5–2.0 for aesthetic
+- Dual-Character LoRA at 0.5 for character separation
+- Command: `--activated-loras "Pixar_Toon.safetensors LTX2.3-IC-LORA-Dual-Character.safetensors" --loras-multipliers "2.0;0.5"`
+- **Remember:** Multi-LoRA CLI output merges filenames into one array entry — always split them manually in the JSON.
+
+**Prompt guidance for two characters:**
+- Define each character by a unique visual identifier in the prompt (fur color, clothing, size, shape) — NOT by "first/second" or "one/two" which the model confuses
+- Give them contrasting attributes (dark/light, big/small, calm/energetic) for reliable separation
+- Describe the interaction explicitly: "character A does X to character B" rather than ambiguous pronouns
+- Emotional beats must be sequential: "first X, then Y, then Z" with clear temporal markers
 
 ## User preferences (Gowrav)
 

@@ -332,6 +332,28 @@ def run_video_gen(scene: dict, scene_dir: Path, script: dict,
         log(f"  ERROR: video_generation.json not created at {config_path}")
         return 1
 
+    # Inject LoRA config if specified in movie_script.json
+    lora = script.get("loras")
+    if not lora and "lora" in scene:
+        lora = scene["lora"]
+    if lora:
+        with open(config_path) as f:
+            vconfig = json.load(f)
+        if "activated_loras" in lora:
+            # Multi-LoRA CLI bug: filenames merged into single string
+            raw = lora["activated_loras"]
+            if isinstance(raw, str) and " " in raw:
+                lora["activated_loras"] = [x.strip() for x in raw.split() if x.strip()]
+            vconfig["activated_loras"] = lora["activated_loras"]
+        if "loras_multipliers" in lora:
+            vconfig["loras_multipliers"] = lora["loras_multipliers"]
+        if "no_loras" in lora and lora["no_loras"]:
+            vconfig["activated_loras"] = []
+            vconfig["loras_multipliers"] = ""
+        with open(config_path, "w") as f:
+            json.dump(vconfig, f, indent=2)
+        log(f"  LoRA config injected: {vconfig.get('activated_loras', [])}")
+
     wgp_cmd = [
         str(WAN_PYTHON), str(WGP_SCRIPT),
         "--process", str(config_path),

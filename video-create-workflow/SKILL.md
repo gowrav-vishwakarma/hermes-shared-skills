@@ -320,4 +320,5 @@ Character State: prev=#<n-1> <tag> | current=#<n> <tag> | last_beat=<one-line> |
 
 - **How to make images** (assets, anchors, ref prompting) -> `wan2gp-image-generation`.
 - **How to make videos** (LTX-2.3 director-style prompting, audio, I2V) -> `wan2gp-video-generation`.
+- **How to handle secondary characters without reference images** -> `wan2gp-video-generation:references/secondary-characters-from-text.md` (describe them in video prompt text when anchor only has one character).
 - **Voice, persona, accent, character quirks** -> `SOUL.md`.

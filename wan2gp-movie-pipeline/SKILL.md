@@ -385,7 +385,13 @@ The pipeline enforces these rules automatically:
 14. **ffmpeg `-sseof` silently fails on MP4 files.** When extracting the last frame for `anchor_from_last_frame`, the old ffmpeg command used `-sseof -0.04` which returns exit code 0 but produces 0 bytes of output on MP4 files. The pipeline script was patched to use ffprobe to get the video duration, then seeks to `duration - 0.5` with `-ss` and `-frames:v 1` instead. **This fix is baked into the latest `run_pipeline.py`** — any movie pipeline started with an old version may hit this bug. Symptoms: `anchor_gen` completes but no `scene_NN_anchor_lastframe.jpg` exists in the scene folder. Recovery: fix the script and re-run.
 15. **Continue-from OOM on 6th+ scene (exit code -9).** When using `continue_from` chains in movies, each subsequent scene loads the previous scene's video as source. The final output scene (scene 6 in a 6-scene movie) OOMs during second-pass denoising (`[Sliding Window X/Y] - Denoising Second Pass` then `exit code -9`) because WanGP's second-pass loads both source and target into VRAM. **Sessions 01-05 succeed, scene 06 fails.** Recovery: just re-run `run_pipeline.py` — it resumes from scene 06 since the GPU freed up after the crash. If the same scene keeps OOMing, split the movie into two batches.
 
-## Delegation
+16. **Standalone scene OOM from prompt complexity (exit code -11).** A scene with NO continuation (normal independent scene) can also segfault during second-pass if the visual description is too dense. Complex elements — massive spray particles, storm clouds, many distinct objects — can trigger `[exit code -11]` (segfault). **The fix:** simplify the anchor and video prompts by removing extreme visual detail (storm clouds, massive spray plumes, "dramatic" multi-element compositions). Use clean, simple compositions with fewer distinct elements. Recovery: edit the prompts, re-run `run_pipeline.py` (skips completed scenes), retry.
+
+17. **write_file creates in CWD, not POSTS_DIR.** The `write_file` tool creates files relative to the agent's current working directory, which is typically `/home/gowrav/posts/` — NOT `$POSTS_DIR` (`$PROFILE_HOME/posts`, which resolves to `$PROFILE_ROOT/home/posts`). If you use `write_file` to create `movie_script.json`, it will land in the wrong location. **Always use the full `$POSTS_DIR/...` path when creating movie files**, e.g.:
+```json
+write_file(path="$POSTS_DIR/2026-05-06_nature_earth/movie_script.json", ...)
+```
+Or verify the path after writing: `echo $POSTS_DIR && ls $POSTS_DIR/2026-05-06_nature_earth/`.
 
 - **How to make images** (assets, anchors, ref prompting) -> `wan2gp-image-generation`
 - **How to make videos** (LTX-2.3 director-style prompting, audio, I2V) -> `wan2gp-video-generation`

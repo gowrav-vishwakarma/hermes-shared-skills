@@ -138,11 +138,27 @@ The Qwen Image Edit Plus 2511 cap is **3 refs**, but the cap is a maximum, not a
 
 **Character asset aspect ratio handling:**
 
-When your provided character photo has a different aspect ratio than needed for video (e.g., 4:3 photo for 9:16 video), do NOT crop or stretch it. Instead:
+When your provided character photo has a different aspect ratio than needed for video (e.g., 4:3 photo for 9:16 video), **first check if the character is centered on a solid background**. If so, use ffmpeg crop instead of WanGP generation:
 
-1. **Save the original** as `character_original.png` (preserves the exact source).
-2. **Generate a new version** using WanGP with `--aspect <target>` and `--image-refs <original>`. This creates a clean, correctly-proportioned character image without distortion.
-3. **Set the generated version** as the main `character.png` for the profile.
+```bash
+ffmpeg -y -i input.png -vf "crop=720:1280:(in_w-720)/2:(in_h-1280)/2" output.png
+```
+
+**Why this works:** The character is already centered on a solid/black background, so cropping the sides removes empty space without affecting the character. No GPU time wasted.
+
+**When to use WanGP generation instead** (not ffmpeg crop):
+- Character is NOT centered on the background
+- Background has complex scenery that needs re-composition (not a solid color)
+- You need the model to re-frame or re-render the scene (e.g., adding new elements, changing lighting)
+- The background extends beyond the crop area and would be lost
+
+> **Pitfall: unnecessary WanGP generation for simple aspect ratio changes.** When a character asset is already centered on a solid/black background and only needs aspect ratio conversion, using `generate_image_config.py` with WanGP wastes 2-3 minutes of GPU time. Always prefer `ffmpeg crop` for this case. Session evidence (2026-05-07): user sent `character_ginnie` (1024×1280, 4:5) centered on black background, asked for 9:16. I launched WanGP generation which was interrupted before completion. User corrected: "you could use ffmpeg directly? Why generate new image?" This lesson is now codified above.
+
+**When ffmpeg crop is NOT appropriate:**
+- Character is off-center (cropping removes part of the character)
+- Background has important elements that would be cropped out
+- The image is not a clean character plate (e.g., has text, UI elements, decorative borders)
+- The aspect ratio difference is so large that cropping removes too much of the scene
 
 Example:
 ```bash
@@ -181,6 +197,8 @@ Describe each reference by index in the prompt, with the slug for auditability:
 > **Pitfall: swapping ref order.** If you write "image 1 is the room, image 2 is the character" but pass `--image-refs character.png location.png`, Qwen will put the character IN the room's place and the room as the character. Always verify the order matches the prompt.
 
 > **Pitfall: forgetting character_base.** When the user has a `character.png` base image, ALWAYS use it as the first image ref for character anchors. This locks identity across all posts. Do not generate a new character image from scratch.
+
+> **Pitfall: generating new character before checking registered assets.** When the user says "character girl" or any character name, do NOT immediately generate a new asset. **First**, check `assets.json` to see if that character is already registered. Query: `cat "$CHARACTER_ASSETS_MANIFEST" | python3 -c "import sys,json; print(list(json.load(sys.stdin)['assets'].keys()))"`. If the slug exists (e.g., `character_girl`), use it directly. Only generate a new character if it's truly not registered. Session evidence (2026-05-06): user said "character girl" but I generated `character_cat_girl` instead of using existing `character_girl` asset. User corrected me: "Wait.. not cat girl its character girl". This wastes GPU time and user trust.
 
 > **Pitfall: sticker images cannot be extracted.** Telegram stickers are vector/metadata objects, not embedded images — `browser_get_images` returns 0 hits. If the user sends a character/photo as a sticker, ask them to resend as a **regular image** (no sticker format). Session evidence (2026-05-05): user sent base character as sticker, agent failed to extract image, had to ask for regular photo. Wasted one turn.
 

@@ -208,6 +208,21 @@ bash "$SKILL_DIR/scripts/acestep-hermes.sh" generate \
   -c "lead guitar melody with bluesy feel"
 ```
 
+**CRITICAL PITFALL — Lego generates a FULL song, it does NOT overlay:**
+Lego uses the source audio only as a structural reference. The output is an entirely new arrangement with the requested track emphasized — NOT the original audio with a vocal/instrument layer grafted on. The output duration, structure, and instrumentation will likely differ significantly from the source. This is NOT the same as mixing a vocal stem over an existing backing track.
+
+**Correct workflow for adding vocals to an existing backing track:**
+1. Generate a NEW track with matching metadata (BPM, key, style, duration) and your lyrics
+2. Extract stems from the generated vocal track → isolate `vocals.wav`
+3. Extract stems from original backing → get instrumental stems (exclude `vocals` stem)
+4. Mix extracted vocals + original instrumental stems using ffmpeg:
+   ```bash
+   ffmpeg -y -i original_instrumentals.wav -i extracted_vocals.wav \
+     -filter_complex "[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0" \
+     -b:a 192k final_vocal_track.mp3
+   ```
+5. Verify the mix — check vocal level vs backing balance, adjust with volume filter if needed.
+
 ### 6. Complete (Base Model Only)
 
 Auto-complete partial tracks with specified instruments.
@@ -405,6 +420,24 @@ Models are lazy-loaded on first request. First generation takes longer (model do
 - **Problem**: `skills_list` shows the skill as `acestep`, but `skill_view(name='acestep')` returns "Skill not found". The actual skill directory is `working-acestep`.
 - **Fix**: Always use `skill_view(name='working-acestep')` to load the skill. Do NOT use `skill_view(name='acestep')` — it will fail.
 - **Why**: This is a manifest/directory naming mismatch. The skill is registered as "acestep" in the manifest but lives in the `working-acestep` directory, which is what `skill_view` resolves against.
+
+### Lyrics with apostrophes break shell quoting (CRITICAL)
+- **Problem**: When lyrics contain apostrophes (`don't`, `won't`, `I'm`, `can't`), the wrapper script's inline `-l "..."` quoting breaks bash parsing. The wrapper passes lyrics inline via `bash "$ACESTEP_SH" generate -l "lyrics"`, and bash interprets the apostrophes as string delimiters, causing "command not found" errors. The generation still runs but the lyrics are truncated or mangled.
+- **Symptoms**: Terminal shows errors like `bash: line 5: Vaastu: command not found`, or the model metadata shows empty/mangled lyrics.
+- **Fix**: Use the **direct REST API** instead of the wrapper script when your lyrics contain apostrophes. Write lyrics to a temp file, then POST via curl with proper JSON encoding:
+```bash
+curl -s -X POST http://127.0.0.1:8001/release_task \
+  -H "Content-Type: application/json" \
+  -d '{"task_type": "text2music", "prompt": "your caption", "lyrics": "lyrics text here", "thinking": true, "batch_size": 2, "audio_format": "wav", "bpm": 95, "duration": 100}'
+```
+Then poll with: `curl -s -X POST http://127.0.0.1:8001/query_result -H "Content-Type: application/json" -d '{"task_id_list": ["JOB_ID"]}'`
+- **Why**: The wrapper script is a strict consumer of shell quoting — it has no mechanism to escape special characters in inline lyrics. The API accepts raw JSON where apostrophes are just characters.
+
+### Lyrics as file path stored as string, not read (CRITICAL)
+- **Problem**: Passing `-l /path/to/lyrics.txt` to the wrapper stores the FILE PATH STRING in the model metadata, not the file's content. The ACE-Step model receives the literal string `/tmp/lyrics.txt` as the lyrics instead of reading and parsing the file.
+- **Symptoms**: Generation completes, model metadata shows `"lyrics": "/tmp/lyrics.txt"` or the generated track has no/empty lyrics.
+- **Fix**: Always pass lyrics **inline** via `-l "text"` when using the wrapper (if no apostrophes), or use the **direct API** with JSON-encoded lyrics (see above pitfall). Do NOT pass a file path to `-l`.
+- **Why**: The wrapper passes the `-l` argument as a string directly to the API's `lyrics` field — it never reads the file itself. The API expects the lyrics text, not a path.
 
 # Songwriting Guide
 

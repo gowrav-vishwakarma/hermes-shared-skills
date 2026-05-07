@@ -18,13 +18,16 @@ set -a; source $PROFILE_ROOT/.env; set +a
 
 Or in Python subprocess calls, explicitly pass the env dict after sourcing:
 ```python
-env = {**os.environ}
+import os
+env = os.environ.copy()  # ALWAYS start from os.environ to preserve PATH, SHELL, HOME
 with open('$PROFILE_ROOT/.env') as f:
     for line in f:
-        if '=' in line:
+        if '=' in line and not line.startswith('#'):
             k, v = line.split('=', 1)
             env[k.strip()] = v.strip()
 ```
+
+**CRITICAL: Never build env from scratch.** If you do `env = {}` then merge `.env` keys, critical system vars (`PATH`, `SHELL`, `HOME`) are lost, causing crashes like `KeyError: 'PATH'` in pydub. ALWAYS start from `os.environ.copy()` first. See `references/env-path-overwrite-pitfall.md` for full details.
 
 Helper scripts are strict consumers; missing keys trigger `[env] required env var ... not set`.
 
@@ -624,9 +627,11 @@ Typical results (720x1280, 20s): 54-88 MB input compresses to 3.8-4.7 MB (~91-95
 
 ---
 
-## Extended Videos (> 20 seconds)
+### Extended Videos (30+ seconds)
 
-LTX-2.3 can generate a maximum of ~481 frames (~20s) in a **single window**. To create longer videos, WanGP uses a **sliding window** mechanism: it generates overlapping chunks and stitches them into one continuous output.
+See also: [dialogue-video-workflow.md](references/dialogue-video-workflow.md) for the critical prompt-repetition problem and workarounds when generating dialogue-heavy videos.
+
+For videos longer than 20s, WanGP uses **sliding window** to generate overlapping windows and stitch them:
 
 ### How sliding windows work
 
@@ -1094,7 +1099,8 @@ When the helper prints `[generate_video_config] coherence reminder:`, verify bef
 
 ## Operational rules
 
-- **Parallel = instant OOM cascade for 3+ processes (CRITICAL).** Launching 3+ `wgp.py` jobs simultaneously crashes all with `exit code -9` (SIGKILL) at `Pinning data of 'transformer' to reserved RAM`. Each distilled-1.1 process uses ~7GB VRAM (~14GB for 2 processes, ~21GB for 3). **2 processes CAN run in parallel on a 24GB GPU** (confirmed: 14GB used, 100% GPU, both generated successfully). **3 processes always OOMs.** Rule: MAX 2 `wgp.py` processes at a time. Always verify nothing else is running before starting new jobs. This is a hardware limit, not a preference.
+- **Complex dialogue prompts break shell quoting.** When passing multi-line dialogue-heavy prompts with nested quotes to `generate_video_config.py`, the shell mangling causes argument misassignment. **Solution:** write `video_generation.json` directly via Python or text editor with `model_type: "I2V"`, then run WanGP with `--process`. See [`references/shell-quoting-pitfalls.md`](references/shell-quoting-pitfalls.md) for full details and alternatives.
+- **Sequential only.**
 
 - **Process wrapper stdout unreliable. CRITICAL: The Hermes terminal wrapper sometimes swallows ALL stdout from wgp.py**, showing `total_lines: 0` or `output_preview: ""` even when the process IS actively generating. The preview may also freeze on old output for 15+ minutes. **Do NOT use process output to diagnose hangs.** Instead:
   1. Check output files: `ls -lh <post-dir>/*.mp4` — new files appearing means progress
