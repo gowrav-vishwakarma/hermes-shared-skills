@@ -68,16 +68,25 @@ TEMPLATE_ALIASES = {
     "ki": "qwen-image-edit-plus2-9x16-KI.json",
     "9x16-ki": "qwen-image-edit-plus2-9x16-KI.json",
     "16x9": "qwen-image-edit-plus2-16x9.json",
+    "9x16-quality": "qwen-image-edit-plus2-9x16-quality.json",
+    "16x9-quality": "qwen-image-edit-plus2-16x9-quality.json",
     "lightning": "qwen-image-edit-plus2-9x16-lightning.json",
     "9x16-lightning": "qwen-image-edit-plus2-9x16-lightning.json",
     "16x9-lightning": "qwen-image-edit-plus2-16x9-lightning.json",
     "flux": "flux2-klein-9b.json",
     "flux-klein": "flux2-klein-9b.json",
+    "flux-16x9": "flux2-klein-16x9.json",
+    "flux-klein-16x9": "flux2-klein-16x9.json",
 }
 
 ASPECT_RESOLUTIONS = {
     "9:16": "720x1280",
     "16:9": "1280x720",
+}
+
+ASPECT_RESOLUTIONS_QUALITY = {
+    "9:16": "928x1664",
+    "16:9": "1664x928",
 }
 
 # Imported lazily so the script remains usable in environments where the
@@ -96,12 +105,14 @@ def _load_asset_manifest_module():
 
 
 def resolve_template(template_arg: str | None, video_prompt_type: str | None,
-                     image_refs: list[str], aspect: str | None = None) -> Path:
+                     image_refs: list[str], aspect: str | None = None,
+                     quality: bool = False) -> Path:
     """Pick the template file based on shorthand or path.
 
     Defaults to `qwen-image-edit-plus2-9x16.json` (mode `I`). If the caller
     explicitly asks for `KI`, prefer the KI-shaped template.  When *aspect* is
     ``"16:9"`` and no explicit template is given, selects the 16x9 variant.
+    When *quality* is True, selects the native-resolution quality template.
     """
     if template_arg:
         candidate = Path(template_arg)
@@ -119,6 +130,10 @@ def resolve_template(template_arg: str | None, video_prompt_type: str | None,
         )
     if (video_prompt_type or "").upper() == "KI" and len(image_refs) >= 2:
         return TEMPLATES_DIR / "qwen-image-edit-plus2-9x16-KI.json"
+    if quality:
+        if aspect == "16:9":
+            return TEMPLATES_DIR / "qwen-image-edit-plus2-16x9-quality.json"
+        return TEMPLATES_DIR / "qwen-image-edit-plus2-9x16-quality.json"
     if aspect == "16:9":
         return TEMPLATES_DIR / "qwen-image-edit-plus2-16x9.json"
     return TEMPLATES_DIR / "qwen-image-edit-plus2-9x16.json"
@@ -291,7 +306,7 @@ def run_wgp(settings_path: Path, out_dir: Path,
         "--process", str(settings_path),
         "--output-dir", str(out_dir),
         "--compile", "--attention", "sage2",
-        "--profile", "4", "--fp16",
+        "--profile", "4", "--bf16",
         *(extra_args or []),
     ]
     print(f"[generate_image_config] running: {' '.join(cmd)}", file=sys.stderr)
@@ -334,8 +349,11 @@ def main() -> int:
                          "Default: derived from --aspect, or 720x1280 if neither given.")
     ap.add_argument("--seed", type=int, default=-1)
     ap.add_argument("--steps", type=int, default=None,
-                    help="num_inference_steps override (template default ~28).")
+                    help="num_inference_steps override (template default 50).")
     ap.add_argument("--guidance-scale", type=float, default=None)
+    ap.add_argument("--quality", action="store_true",
+                    help="Use native model resolution (928x1664 / 1664x928) for "
+                         "maximum photorealism. Slower but significantly sharper.")
     ap.add_argument("--activated-loras", nargs="*", default=None)
     ap.add_argument("--loras-multipliers", default=None)
     ap.add_argument("--template", default=None,
@@ -349,12 +367,14 @@ def main() -> int:
     out_dir = Path(args.output_dir).resolve()
 
     if args.resolution is None:
-        args.resolution = ASPECT_RESOLUTIONS.get(args.aspect, "720x1280")
+        res_map = ASPECT_RESOLUTIONS_QUALITY if args.quality else ASPECT_RESOLUTIONS
+        args.resolution = res_map.get(args.aspect, "928x1664" if args.quality else "720x1280")
 
     image_refs = merge_refs(args.ref_assets, args.image_refs)
 
     template_path = resolve_template(args.template, args.video_prompt_type,
-                                     image_refs, args.aspect)
+                                     image_refs, args.aspect,
+                                     quality=args.quality)
     video_prompt_type = decide_video_prompt_type(args.video_prompt_type,
                                                  image_refs)
 

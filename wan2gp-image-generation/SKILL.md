@@ -198,9 +198,100 @@ Describe each reference by index in the prompt, with the slug for auditability:
 
 > **Pitfall: forgetting character_base.** When the user has a `character.png` base image, ALWAYS use it as the first image ref for character anchors. This locks identity across all posts. Do not generate a new character image from scratch.
 
+**Pitfall: `--ref-assets` doesn't guarantee visual presence in generated scenes.** Using only `--ref-assets <slug>` registers the asset and passes it as a reference, but the Qwen model may NOT visibly place the character in the new scene (it uses the ref as an identity lock, not necessarily as a composited element). When you NEED a character from the asset library to be **visibly present** in the generated image (not just used as an identity reference), **ALSO pass `--image-refs <absolute_path>`** with the actual file path. The `--image-refs` path is prepended to the `--ref-assets` paths, giving the model a stronger visual cue. Example:
+```bash
+--ref-assets character_base --image-refs "/home/.../assets/character_base.jpg"
+```
+**CRITICAL: Also reference images by index in the prompt.** Qwen Image Edit Plus uses the prompt to decide which ref goes where. Write "The character (image 1)" or "Ginnie (image 2)" in the prompt so Qwen knows which image ref to use. If you write "image 1" but the ref order is wrong, Qwen will swap characters. Example:
+```bash
+--prompt "The accountant (image 1, character_accountant) sinks in water while Ginnie (image 2, character_base) reaches down..."
+--ref-assets character_accountant character_base \
+--image-refs "/path/character_accountant.jpg" "/path/character.png"
+```
+This is the pattern that works. Session evidence (2026-05-07): first rescue anchor attempt used only `--ref-assets character_accountant character_base` — the resulting image was an underwater scene where Ginnie was barely recognizable. After adding `--image-refs` with actual file paths AND explicit "image 1"/"image 2" references in the prompt, the rescue anchor (rescue_anchor3.jpg) clearly showed both characters in the intended pose.
+
+**Pitfall: swapping ref order.** If you write "image 1 is the room, image 2 is the character" but pass `--image-refs character.png location.png`, Qwen will put the character IN the room's place and the room as the character. Always verify the order matches the prompt.
+
 > **Pitfall: generating new character before checking registered assets.** When the user says "character girl" or any character name, do NOT immediately generate a new asset. **First**, check `assets.json` to see if that character is already registered. Query: `cat "$CHARACTER_ASSETS_MANIFEST" | python3 -c "import sys,json; print(list(json.load(sys.stdin)['assets'].keys()))"`. If the slug exists (e.g., `character_girl`), use it directly. Only generate a new character if it's truly not registered. Session evidence (2026-05-06): user said "character girl" but I generated `character_cat_girl` instead of using existing `character_girl` asset. User corrected me: "Wait.. not cat girl its character girl". This wastes GPU time and user trust.
 
 > **Pitfall: sticker images cannot be extracted.** Telegram stickers are vector/metadata objects, not embedded images — `browser_get_images` returns 0 hits. If the user sends a character/photo as a sticker, ask them to resend as a **regular image** (no sticker format). Session evidence (2026-05-05): user sent base character as sticker, agent failed to extract image, had to ask for regular photo. Wasted one turn.
+
+## Model choice: Flux vs Qwen for character bases
+
+When generating standalone character base images (text-to-image, 0 refs), **prefer Flux 2 Klein 9B over Qwen Image Edit Plus 2511** for realistic results:
+
+| Aspect | Flux 2 Klein 9B (`--template flux-klein`) | Qwen 2511 (`--quality`) |
+|--------|------------------------------------------|------------------------|
+| Speed | ~35 seconds (8 steps) | ~3 minutes (50 steps) |
+| Skin texture | Visible pores, natural imperfections | Poreless, plastic-smooth |
+| Hair | Natural flyaways, slight messiness | Perfectly uniform strands |
+| Overall | Genuine candid photograph | AI doll / airbrushed |
+| Resolution | 720x1280 (default) | 928x1664 (quality mode) |
+
+**When to use Flux:**
+- Character base images (text-to-image, identity anchors)
+- Any time the user wants "real photograph" look
+- User says current output looks "not realistic" or "like AI"
+
+**When to use Qwen:**
+- Image editing tasks (Qwen is the edit model; Flux has no editing capability)
+- When you need higher resolution (928x1664) and can accept the AI-perfect aesthetic
+- Multi-ref anchors (Qwen handles 3 refs; Flux uses a different pipeline)
+
+**Flux invocation example:**
+```bash
+python3 "$PROFILE_SKILLS/wan2gp-image-generation/scripts/generate_image_config.py" \
+    --prompt "Candid phone photo of a 17-year-old Indian teenage girl, natural skin texture, no makeup..." \
+    --output-filename character_base \
+    --output-dir "$PROFILE_HOME" \
+    --template flux-klein \
+    --aspect 9:16 \
+    --steps 8 \
+    --guidance-scale 2.5 \
+    --seed 31337 \
+    --run
+```
+
+**Note:** Flux defaults to 4 steps at guidance 2.5. Use `--steps 8` for better quality. Both `guidance_scale` and `steps` can be overridden via CLI flags.
+
+## Quality tiers
+
+Three generation tiers are available, trading speed for photorealism:
+
+| Tier | Template/Flag | Resolution | Steps | Guidance | Use Case |
+|------|--------------|-----------|-------|----------|----------|
+| **Quality** | `--quality` or `--template 9x16-quality` | 928x1664 / 1664x928 | 50 | 4 | Final character assets, standalone images (Qwen only) |
+| **Standard** | default (`--aspect 9:16`) | 720x1280 / 1280x720 | 50 | 4 | Video anchors, iterative work (Qwen only) |
+| **Draft** | `--template lightning` | 720x1280 / 1280x720 | 4 | 1 | Composition preview ONLY |
+| **Flux Character** | `--template flux-klein --steps 8` | 720x1280 | 8 | 2.5 | Realistic character base images (Flux) |
+
+**Official Qwen parameters (applied across all tiers except Draft):**
+- `true_cfg_scale: 4.0` (mapped from `guidance_scale: 4` in WanGP)
+- `negative_prompt: " "` (single space — official recommendation)
+- `num_inference_steps: 50` (official default for text-to-image)
+
+**Quality tier** uses the model's native trained resolution (928x1664 for 9:16). This produces ~67% more pixels than standard and significantly sharper detail — skin texture, hair strands, fabric weave. Use for final character base images and standalone assets. Expect ~80% longer generation time.
+
+**Draft tier (Lightning LoRA)** is for rapid composition checks ONLY:
+- Disables CFG (`guidance_scale: 1`) — the model cannot follow negative prompts
+- CANNOT be run at higher steps — overcooks/artifacts (confirmed by model developers)
+- Do NOT use for final output — "generates very static and very identical images"
+- LoRAs already downloaded: `Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors`, `Qwen-Image-Lightning-8steps-V1.1-bf16.safetensors`
+
+### Flux 2 Klein 9B (alternative model)
+
+Flux Klein is a **distilled** model optimized for speed (4 steps). Use via `--template flux` (9:16) or `--template flux-16x9` (16:9).
+
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| Steps | 4 | Distilled model — increasing steps does NOT improve quality |
+| Guidance | 2.5 | Flux uses embedded guidance, not true CFG |
+| Negative prompt | `" "` | Flux code supplies its own default if empty |
+| Resolution | 720x1280 / 1280x720 | |
+
+**When to use Flux vs Qwen:**
+- Flux Klein: Fast generation (~4 steps), good for quick iterations, single-character portraits. Cannot composite multiple refs (no multi-ref editing like Qwen).
+- Qwen Edit Plus 2511: Multi-ref compositing (up to 3 refs), identity locking from existing assets, scene composition from image plates. Slower but far more controllable.
 
 ## Helper invocations
 
@@ -243,6 +334,34 @@ python3 "$PROFILE_SKILLS/wan2gp-image-generation/scripts/remove_asset.py" \
 ```
 
 Removes the manifest entry, deletes the `.jpg`/`.png` and co-located `.json` config. Pass `--keep-files` to only remove from the manifest. Use `--list` (optionally with `--kind location`) to see all registered assets before deciding what to remove.
+
+**Keep-only mode** (2026-05-07): `--keep-only <slug1> <slug2> ...` removes every asset from the manifest AND deletes their files on disk, keeping only the specified slugs. This is a bulk-cleanup shortcut so you don't need a custom Python script:
+
+```bash
+python3 "$PROFILE_SKILLS/wan2gp-image-generation/scripts/remove_asset.py" \
+    --keep-only character_midshot_plainwall character_kurti_palazzo
+```
+
+### Text-to-image standalone character base
+
+When you need a fresh base character (`character_base`) with **no reference images** (pure text-to-image), use `generate_image_config.py` with zero `--ref-assets` and zero `--image-refs`. The script auto-detects 0 refs and sets `video_prompt_type` to `""` (text-only mode). Use `--quality` for maximum photorealism at native resolution:
+
+```bash
+python3 "$PROFILE_SKILLS/wan2gp-image-generation/scripts/generate_image_config.py" \
+    --prompt "Cinematic portrait of a stunningly cute South Asian teenage Indian girl, warm golden-brown skin, large expressive almond-shaped dark eyes, soft smile, long glossy black hair with gentle waves, delicate facial features, youthful beauty. She wears a simple dusty rose colored cotton t-shirt, small gold hoop earrings, a delicate gold necklace. Clean white studio background, soft diffused lighting, shot on Canon EOS R5, 85mm portrait lens, shallow depth of field, professional photography, high detail, photorealistic." \
+    --output-filename character_base \
+    --output-dir "/home/gowrav/.hermes/profiles/meena/home" \
+    --aspect 9:16 \
+    --quality \
+    --seed 42 \
+    --run
+```
+
+**Important notes:**
+- Text-to-image (0 refs) does NOT lock identity — it generates a NEW character from scratch. Use this only for creating a new base character, not for anchors.
+- The Qwen 20B model compiles on first run — expect 5-10 minutes for the first invocation. Subsequent runs are faster.
+- Always register the output in `assets.json` after generation. If generating to `$PROFILE_HOME` as `character.png`, update the manifest entry accordingly.
+- For a high-quality base, use explicit camera specs ("Canon EOS R5, 85mm lens") and detailed physical description in the prompt.
 
 ### Per-post anchor
 
@@ -295,15 +414,20 @@ The helpers auto-pick `I` vs `KI` based on ref count and first-ref aspect, enfor
 - **Env var sanity.** If a helper script errors with `[env] required env var ... not set`, the agent shell did not source `$PROFILE_ROOT/.env`. Recover with `set -a; source $PROFILE_ROOT/.env; set +a` and retry. The strict requirement exists because `Path.home()` inside Hermes maps to `$PROFILE_HOME`, so silent fallbacks to `~/assets/...` previously landed on the wrong files.
 
 - **Qwen model produces hyper-perfect AI-looking outputs for natural scenes.** Qwen Image Edit Plus 2511 naturally gravitates toward saturated colors, crystal-clear water, perfectly-distributed lighting, and uniform textures when generating nature/outdoor/location assets. The result looks like AI art, not a photograph. **Counter-strategy for realistic look:**
+  - **First: use `--quality` flag** to generate at native resolution (928x1664). The 720x1280 standard resolution loses fine detail that makes images look real.
+  - **Use official minimal negative prompt** (`" "` single space). Complex negative prompts can over-constrain the model.
+  - **Use 50 steps** (now the template default). Previously 30 steps was too low.
   - Explicitly instruct "documentary photography, natural colors, slight film grain, nothing overly saturated or perfect — like a real photograph taken by a nature photographer"
   - Add camera specs: "Shot on Canon EOS R5, 35mm lens, natural light" (specific camera info helps the model think photographically)
   - Describe imperfections: "muddy and earthen banks with scattered rocks, dead leaves, small patches of grass", "rough bark texture", "not crystal-perfect water", "gentle ripples and slight reflection, not crystal-clear"
   - Explicitly negate: "No fantasy elements, no magical glow, nothing overly saturated"
   - Even with these cues, the output may still lean toward AI-perfect — be prepared to iterate with more aggressive imperfection cues or consider that Qwen may not be capable of pure photorealism for nature scenes.
   - **Session evidence (2026-05-05):** First attempt with "photorealistic" prompt was rejected as "not that great." Second attempt with "documentary photography, Canon EOS R5, 35mm lens" prompt was still rejected as leaning too AI-perfect (hyper-clarity, bloom lighting, texture uniformity). Two iterations needed, quality still debatable.
+  - **Fix applied (2026-05-07):** Raised steps from 30→50, switched to native resolution via `--quality`, set `negative_prompt: " "` per official docs. These three changes should significantly reduce the AI-perfect look.
 
 ## Supporting references
 
+- [`references/model-style-limits.md`](references/model-style-limits.md) — Qwen 2511 and Flux Klein are fundamentally photorealistic; they CANNOT produce Pixar, cartoon, anime, or any stylized output. ComfyUI (SD/SDXL) is required for stylized generation.
 - [`references/qwen-realism-challenge.md`](references/qwen-realism-challenge.md) — Qwen's inherent hyper-perfect aesthetic and workarounds for documentary/photorealistic style.
 
 - **Aspect ratio mismatch when regenerating existing assets.** When you regenerate an asset that already exists in `assets.json`, the `--aspect` flag sets the new aspect ratio but old files with the old aspect ratio may still exist on disk (renamed with `(2)` suffix or backup names). **Always check for stale files after regeneration:**

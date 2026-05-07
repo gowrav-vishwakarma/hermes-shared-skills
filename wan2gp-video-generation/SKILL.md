@@ -228,9 +228,7 @@ Copy the **prompt phrase** directly into your video prompt at the point where yo
 |----------|--------------|-------------|
 | Drone Fly Over | `Drone fly over, high altitude flight moving forward over the landscape` | Establishing shots; travel sequences |
 | Epic Drone Reveal | `Epic drone reveal, rising and tilting down to reveal the scene` | Grand opening; reveal a location |
-| Large Scale Drone Orbit | `Large scale drone orbit, massive sweeping circle around the landscape` | Epic environment showcase |
 | Top Down (God's Eye) | `Top down shot, camera pointing straight down, slow twist` | Abstract composition; overhead reveal |
-| FPV Drone Dive | `FPV drone dive, aggressive diving motion down a vertical structure` | Adrenaline; vertiginous descent |
 
 #### Stylized / Effect
 
@@ -241,9 +239,6 @@ Copy the **prompt phrase** directly into your video prompt at the point where yo
 | POV Walk | `POV walk, first person camera moving forward with bobbing motion` | Immersive exploration; horror |
 | Over the Shoulder | `Over the shoulder shot, camera mounted behind subject A framing subject B` | Dialogue scenes; spatial relationship |
 | Hyperlapse | `Hyperlapse, camera moves forward rapidly, time accelerated, fast motion, light trails` | Time passage; city energy |
-| Barrel Roll | `Barrel roll, camera spins 360 degrees clockwise while moving forward, disorienting` | Surreal, dreamlike sequences |
-| Bullet Time | `Bullet time, frozen moment, ultra slow motion, camera orbit` | Freeze peak-action moment |
-| Worm's Eye Tracking | `Worm's eye view, low angle tracking, camera moves along the ground looking up` | Power, dominance; hero entrance |
 
 #### Combining Movements
 

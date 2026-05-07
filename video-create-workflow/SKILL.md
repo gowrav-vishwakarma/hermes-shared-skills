@@ -88,6 +88,12 @@ When sourcing visual content from browsers (Instagram, TikTok, etc.), load and f
 
 Skip these steps for posts #2 onwards. For post #1 (or when assets are missing):
 
+0. **Bootstrap directory structure.** The `.env` may define valid paths but the directories can be missing. Before anything else, verify and create:
+   ```bash
+   mkdir -p "$CHARACTER_ASSETS_DIR" "$POSTS_DIR" "$(dirname $MEMORY_FILE)"
+   ```
+   If `$CHARACTER_ASSETS_MANIFEST` (assets.json) doesn't exist, create a minimal manifest with the `character_base` entry pointing to `character.png`. This is a **common cold-start failure** — the skills assume these exist but they are never auto-created.
+
 1a. **Write SOUL.md** if it doesn't exist. Define: character identity, personality traits, speech style/accents, visual identity (outfits, colors, setting, decor), emotional arc, content direction. The SOUL.md is read by every prompt-writing step — it is the source of truth for character voice and visual details.
 
 1b. **Bootstrap asset manifest.** Create `$CHARACTER_ASSETS_MANIFEST` with the `character_base` entry (the base `$CHARACTER_BASE` image, kind="character", aspect="1:1", tags include "character" and "identity"). This is the minimum viable manifest.
@@ -210,6 +216,8 @@ If incomplete posts exist, **ask the user**: "I found [N] incomplete post(s) fro
 9. **Author video.** Before writing the video prompt, **load and carefully read** the `wan2gp-video-generation` skill AND its `references/ltx-2-3-prompting.md` (the full prompting deep-dive covering temporal connectors, AV sync, duration strategy, lens language, scene design vocabulary, and dialogue segmentation). Use what you read to plan a dramatic, well-structured video prompt -- do not wing it from memory.
 
 **Model choice:** Default `--model distilled-1.1` (8 steps, auto-LoRAs for HDR/outpaint/union-control). For fastest iteration without compile overhead, use `--model gguf` (8 steps, C++ runtime). See `wan2gp-video-generation` skill "Model selection" section for both variants.
+
+**Dual-frame keyframing:** For scenes where you have both a known opening and closing composition (start image + end image), use `--image-start` + `--image-end` together (produces "SE" mode). This bridges both compositions in a single pass. See `wan2gp-video-generation:references/dual-frame-keyframing.md` for the full guide on when to use this vs. the movie pipeline.
 
 **Video gen workflow (split approach -- NEVER use `--run`):**
 - **Step A:** `python3 "$PROFILE_SKILLS/wan2gp-video-generation/scripts/generate_video_config.py" --aspect <chosen> --image-start <anchor>.jpg --output-dir <post-dir>` (writes JSON, takes ~2s)

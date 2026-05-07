@@ -48,9 +48,27 @@ def main() -> int:
                     help="List all registered assets and exit.")
     ap.add_argument("--kind", default=None,
                     help="When used with --list, filter by kind.")
+    ap.add_argument("--keep-only", nargs="*", metavar="SLUG",
+                    help="Keep only the specified slugs; remove everything else from "
+                         "the manifest and delete their files on disk. Example: "
+                         "--keep-only character_midshot_plainwall character_kurti_palazzo")
     args = ap.parse_args()
 
     am = _import_manifest()
+
+    if args.keep_only is not None:
+        # Keep-only mode: remove everything except specified slugs
+        keep_set = set(args.keep_only)
+        all_slugs = list(am.list_assets().keys())
+        to_remove = [s for s in all_slugs if s not in keep_set]
+        if to_remove:
+            print(f"[remove_asset] keep-only: keeping {len(keep_set)}, removing {len(to_remove)}", file=sys.stderr)
+            for slug in to_remove:
+                am.remove(slug, delete_files=True)
+                print(f"  removed {slug!r}", file=sys.stderr)
+        else:
+            print(f"[remove_asset] keep-only: all {len(all_slugs)} already in keep set.", file=sys.stderr)
+        return 0
 
     if args.list_assets:
         assets = am.list_assets(kind=args.kind)
