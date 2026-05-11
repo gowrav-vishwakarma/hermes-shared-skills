@@ -85,6 +85,30 @@ $WAN_PYTHON wgp.py --process "$POSTS_DIR/.../video_generation.json" \
 
 This also applies when running `wgp.py` directly (not via generate_video_config.py). If you use a terminal background process, make sure the working directory is set to WAN_APP_DIR, not the post directory.
 
+## Background wrapper fails for wgp.py (CRITICAL)
+
+When launching `wgp.py --process` via the Hermes `terminal(background=true)` wrapper, the process uses the **system `python3`** (which lacks `torch`), NOT the WanGP virtual environment. This produces:
+
+```
+ModuleNotFoundError: No module named 'torch'
+```
+
+Even when the `.env` file is sourced, the background wrapper overrides the Python interpreter. **This means you can NEVER use `terminal(background=true)` for `wgp.py`.**
+
+**Fix — run in foreground instead:**
+```bash
+cd $WAN_APP_DIR
+$WAN_PYTHON wgp.py --process "$POSTS_DIR/.../video_generation.json" \
+    --output-dir "$POSTS_DIR/.../" --compile --attention sage2 --profile 4 --bf16
+```
+
+Or via a foreground terminal call with `workdir` set to `$WAN_APP_DIR`:
+```bash
+terminal(command="$WAN_PYTHON wgp.py --process $CONFIG --output-dir $OUTDIR --compile --attention sage2 --profile 4 --bf16", workdir=$WAN_APP_DIR, timeout=600)
+```
+
+**Why this matters:** Video generation takes 3-5 minutes. The foreground approach blocks the agent but works reliably. The background wrapper is unreliable for long-running WanGP jobs. For the split config-then-run approach (Step A → Step B), use Step A (config generation) which is fast and safe for background, but always run Step B (wgp.py) in the foreground.
+
 ## Quick reference command (multi-character dialogue reel)
 
 ```bash

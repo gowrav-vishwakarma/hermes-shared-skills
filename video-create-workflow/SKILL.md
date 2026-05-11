@@ -7,7 +7,7 @@ license: MIT
 metadata:
   hermes:
     tags: [video, character-video, workflow]
-    related_skills: [wan2gp-image-generation, wan2gp-video-generation, wan2gp-movie-pipeline]
+    related_skills: [wan2gp-image-generation, wan2gp-video-generation, wan2gp-movie-pipeline, content-research]
 ---
 
 # Per-Post Video Workflow
@@ -331,3 +331,4 @@ Character State: prev=#<n-1> <tag> | current=#<n> <tag> | last_beat=<one-line> |
 - **How to make videos** (LTX-2.3 director-style prompting, audio, I2V) -> `wan2gp-video-generation`.
 - **How to handle secondary characters without reference images** -> `wan2gp-video-generation:references/secondary-characters-from-text.md` (describe them in video prompt text when anchor only has one character).
 - **Voice, persona, accent, character quirks** -> `SOUL.md`.
+- **Trending topics, content research, trend validation** -> `content-research` (protocol for researching trending topics across YouTube/Instagram/Google, plus reference data for Indian audiences).

@@ -252,7 +252,11 @@ python3 "$PROFILE_SKILLS/wan2gp-image-generation/scripts/generate_image_config.p
     --run
 ```
 
-**Note:** Flux defaults to 4 steps at guidance 2.5. Use `--steps 8` for better quality. Both `guidance_scale` and `steps` can be overridden via CLI flags.
+> **Pitfall: Flux doesn't handle subdirectories in `--output-filename`.** When you pass a filename with a subdirectory path (e.g., `--output-filename assets/location_hell_fortress`), Flux creates a file named `assets_location_hell_fortress.jpg` in the output root instead of creating the subdirectory. **Workaround:** Always point `--output-dir` directly at the target subdirectory when generating assets that belong in subdirs. Example: `--output-filename location_hell_fortress --output-dir /path/to/assets/` instead of `--output-dir /path/to/`.
+
+> **Pitfall: Flux CANNOT composite multiple references.** Flux 2 Klein 9B only supports single-ref text-to-image. It does NOT have multi-ref editing capability like Qwen Edit Plus 2511. Any scene needing 2-3 refs (character + creature + location) MUST use Qwen Edit Plus 2511, despite the 15x speed penalty. Use Flux only for: (1) standalone character/creature bases (0 refs), (2) single-ref anchors (1 ref only), (3) location plates (0 refs).
+
+> **Model selection strategy for movie pipelines:** Generate all standalone character/creature/location BASE assets with Flux (~20s each). But when the pipeline runs anchor generation for scenes with 2-3 refs, it will automatically switch to Qwen Edit Plus 2511 via the default template (`qwen-image-edit-plus2-9x16.json`). Expect Qwen's first-run cold compilation to take 5-10 minutes with zero visible output — this is normal and the pipeline will proceed afterward.
 
 ## Quality tiers
 
