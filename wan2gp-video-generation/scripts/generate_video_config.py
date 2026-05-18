@@ -371,7 +371,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(
         description="Build a WanGP LTX-2.3 video_generation.json from a template + overrides."
     )
-    ap.add_argument("--prompt", required=True, help="LTX-2.3 cinematic prompt.")
+    ap.add_argument("--prompt", default=None,
+                    help="LTX-2.3 cinematic prompt. Required unless --run-json is set.")
     ap.add_argument("--alt-prompt", default=None)
     ap.add_argument("--negative-prompt", default=None)
     ap.add_argument(
@@ -428,10 +429,12 @@ def main() -> int:
         "--keep-frames-video-guide", default="",
         help="Frames to keep from the control video guide (empty=all).",
     )
-    ap.add_argument("--output-filename", required=True,
-                    help="WanGP `output_filename` (basename, no extension).")
-    ap.add_argument("--output-dir", required=True,
-                    help="Destination folder. video_generation.json is written here.")
+    ap.add_argument("--output-filename", default=None,
+                    help="WanGP `output_filename` (basename, no extension). "
+                         "Required unless --run-json is set.")
+    ap.add_argument("--output-dir", default=None,
+                    help="Destination folder. video_generation.json is written here. "
+                         "Required unless --run-json is set (then defaults to JSON's parent).")
     ap.add_argument("--aspect", default=None, choices=["9:16", "16:9"],
                     help="Aspect ratio shorthand. Sets resolution and picks the "
                          "matching template when --resolution/--template are not "
@@ -480,10 +483,55 @@ def main() -> int:
     ap.add_argument("--template", default=None,
                     help=f"Template path or alias. Aliases: {sorted(TEMPLATE_ALIASES)}")
     ap.add_argument("--run", action="store_true",
-                    help="After writing JSON, execute wgp.py --process via WanGP venv.")
+                    help="Alias of --generate-and-run. After writing JSON, run wgp.py --process.")
+    ap.add_argument("--generate-only", action="store_true",
+                    help="Write JSON only, never run wgp.py. (Same as omitting --run.)")
+    ap.add_argument("--generate-and-run", action="store_true",
+                    help="Write JSON and run wgp.py --process. Explicit alias of --run.")
+    ap.add_argument("--run-json", default=None, metavar="PATH",
+                    help="Skip JSON generation; run wgp.py --process on this existing JSON. "
+                         "All build args (--prompt, --output-filename, etc.) are ignored.")
     ap.add_argument("--extra-wgp-args", nargs=argparse.REMAINDER, default=[],
-                    help="Extra args appended to wgp.py when --run is set.")
+                    help="Extra args appended to wgp.py when running.")
     args = ap.parse_args()
+
+    if args.generate_and_run:
+        args.run = True
+    if args.generate_only and (args.run or args.run_json):
+        sys.exit("[generate_video_config] --generate-only cannot be combined with --run / --generate-and-run / --run-json.")
+
+    if args.run_json:
+        json_path = Path(args.run_json).expanduser().resolve()
+        if not json_path.is_file():
+            sys.exit(f"[generate_video_config] --run-json: file not found: {json_path}")
+        out_dir = Path(args.output_dir).expanduser().resolve() if args.output_dir else json_path.parent
+        out_dir.mkdir(parents=True, exist_ok=True)
+        if not WAN_APP_DIR.is_dir():
+            print(f"[generate_video_config] WanGP app dir not found: {WAN_APP_DIR}", file=sys.stderr)
+            return 2
+        env_python_str = os.environ.get("WAN_PYTHON")
+        env_python = Path(env_python_str) if env_python_str else WAN_APP_DIR / "env" / "bin" / "python"
+        if not env_python.is_file():
+            print(f"[generate_video_config] WanGP venv python missing: {env_python}", file=sys.stderr)
+            return 2
+        cmd = [
+            str(env_python), "wgp.py",
+            "--process", str(json_path),
+            "--output-dir", str(out_dir),
+            "--compile", "--attention", "sage2",
+            "--profile", "4", "--fp16",
+            *args.extra_wgp_args,
+        ]
+        print(str(json_path))
+        print(f"[generate_video_config] running: {' '.join(cmd)}", file=sys.stderr)
+        return subprocess.call(cmd, cwd=str(WAN_APP_DIR))
+
+    missing = [name for name, val in (("--prompt", args.prompt),
+                                       ("--output-filename", args.output_filename),
+                                       ("--output-dir", args.output_dir)) if not val]
+    if missing:
+        sys.exit(f"[generate_video_config] missing required arg(s): {' '.join(missing)} "
+                 f"(use --run-json PATH to run an existing JSON instead).")
 
     out_dir = Path(args.output_dir).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)

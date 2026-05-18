@@ -1,175 +1,125 @@
 ---
 name: wan2gp-video-generation
-description: LTX-2.3 video generation via WanGP -- director-style prompting, audio direction, I2V coherence
+description: LTX-2.3 22B video generation via WanGP. Director-style prompting, dual-frame keyframing, audio sync, tools. Default 481 frames @ 24 fps (~20 s); longer via sliding window.
 category: media
 ---
 
 # WanGP Video Generation (LTX-2.3)
 
-Generate videos with native audio using **LTX-2.3 22B distilled** through WanGP CLI. Default is ~20 s (481 frames @ 24 fps) in a single pass. For longer videos, WanGP's **sliding window** mechanism generates multiple overlapping windows and stitches them.
+Single tool: `scripts/generate_video_config.py`. T2V vs I2V is auto-picked from `--image-start`.
 
-Supports **text-to-video** (T2V) and **image-to-video** (I2V) -- the helper auto-picks from `--image-start`.
+`$PROFILE_ROOT/.env` is **not** auto-sourced; run `set -a; source $PROFILE_ROOT/.env; set +a` first. Required env: `WAN_APP_DIR`, `WAN_PYTHON`, `PROFILE_HOME`, `PROFILE_SKILLS`.
 
-## ⚠️ CRITICAL: Use `generate_video_config.py --run` for Single Videos
+## Script modes (mutually exclusive)
 
-**For a standalone video (single scene, any length), use the generator script with `--run`.** This is the only safe way:
+| Flag | Effect |
+|------|--------|
+| (no flag) or `--generate-only` | Build JSON, write `<output-dir>/video_generation.json`, exit. |
+| `--generate-and-run` or `--run` | Build + run `wgp.py --process` via `$WAN_PYTHON` in `$WAN_APP_DIR`. |
+| `--run-json PATH` | Skip build; run an existing JSON. Re-run `--generate-only` with corrected args first to overwrite the JSON, then `--run-json` it — no separate "fix" script needed. |
 
-```bash
-python3 "$PROFILE_SKILLS/wan2gp-video-generation/scripts/generate_video_config.py" \
-    --prompt "Your cinematic prompt here..." \
-    --output-filename shot_name \
-    --output-dir /path/to/post/folder \
-    --aspect 9:16 \
-    --seed 42 \
-    --run
+**CRITICAL — GPU runs MUST be launched in background with notify:**
+
+`--generate-and-run` and `--run-json` block for 3-15 min (wgp.py holds the GPU). A new user message kills a blocking shell call. Always launch via:
+
 ```
-
-The `--run` flag: generates the config JSON **AND** executes `wgp.py --process` automatically. Single command, zero manual config.
-
-**NEVER:**
-- Write the JSON config manually — 50+ fields, easy to get wrong (missing `model_type`, wrong `image_mode`, legacy `start_image` field, etc.).
-- Reach for the movie pipeline for a single video — use `video-create-workflow` or direct generation instead.
-- Run `generate_video_config.py` in background AND `wgp.py` in foreground — `--run` does both.
-
-**First-run cold start:** TorchInductor compilation takes 5-15 min on first run with ZERO visible GPU output. This is normal. Subsequent runs skip compilation (~3:30).
-
-## ⚠️ CRITICAL: WanGP Setup Verification Pitfall
-
-**Never assume WanGP is available before running video generation.** The `$WAN_APP_DIR` environment variable may be:
-- Empty (unconfigured)
-- Set to non-existent path
-- Set but WanGP not installed
-
-**Always verify before use:**
-```bash
-echo "$WAN_APP_DIR"
-ls "$WAN_APP_DIR/wgp.py"
-```
-
-If WanGP is unavailable, fall back to **manim** for standalone 20s videos.
-
-## Generation Time Benchmarks
-
-**RTX 4090 (24GB VRAM), LTX-2.3 distilled-1.1, 1280x720:**
-
-| Scenario | First Run | Subsequent Runs |
-|----------|-----------|-----------------|
-| Standalone T2V (no LoRA) | ~3:37 | ~3:30 |
-| T2V with LoRA | ~3:45 | ~3:38 |
-| I2V with anchor | ~3:35 | ~3:30 |
-| Extended video (30s, 2 windows) | ~7:15 | ~7:05 |
-
-**Why first run is slower:** TorchInductor kernel compilation happens on first run (5-15 min CPU-bound phase, NO GPU usage, NO output). After compilation, kernels are cached in `~cache/torch_inductor/` and subsequent runs skip this phase.
-
-**Mitigation:** Set `TORCHINDUCTOR_FORCE_DISABLE=1` to skip compilation (faster start but slower per-step inference).
-
-## ⚠️ CRITICAL: WanGP Video Generation — Foreground Only
-
-**You MUST run `wgp.py` in foreground mode (via terminal with `workdir`).** The background wrapper uses the system `python3` (no `torch`), which fails every time.
-
-**Correct invocation:**
-```bash
 terminal(
-    command="$WAN_PYTHON wgp.py --process $CONFIG --output-dir $OUTDIR --compile --attention sage2 --profile 4 --fp16",
-    workdir=$WAN_APP_DIR,
-    timeout=600
+    command="python3 $PROFILE_SKILLS/wan2gp-video-generation/scripts/generate_video_config.py --generate-and-run ...",
+    background=true,
+    notify_on_complete=true
 )
 ```
 
-**What to say when launching:** *"Video generation started. It'll take ~3-5 min. I'll check on it."* Then monitor with `process(action='log')`.
+The system `python3` lacks torch — never invoke `wgp.py` outside `$WAN_PYTHON`. `workdir` for the terminal should be `$WAN_APP_DIR`.
 
-### ⚠️ CONTRADICTION ALERT: Old documentation says "background mode"
+## Anchor consistency (mandatory)
 
-Older versions of this skill documented using `terminal(background=true)`. That was **wrong** — it never worked for `wgp.py` because the background wrapper overrides the Python interpreter. The `cli-usage-pitfalls.md` reference has the authoritative fix. Always use foreground + `workdir`.
+The anchor IS frame 0. Every character that should appear anywhere in the shot — start, middle, or end — MUST be visible in a single anchor image. LTX-2.3 invents new random faces for anyone not present in the anchor.
 
-### Background mode for config generation only
+| Need | Use |
+|------|-----|
+| 1 character, single composition for the whole shot | `--image-start <anchor>` |
+| Different opening and closing compositions (known start AND end frame) | `--image-start <start> --image-end <end>` (auto-adds `E` to `image_prompt_type`) |
+| Intermediate keyframes at specific positions | `--image-start <a>` + `--image-refs <k1> <k2> ...` + `--frames-positions "120 240"` (auto-adds `F`, video_prompt_type=`KFI`) |
+| 2-3 characters in the same shot | Build the anchor in `wan2gp-image-generation` with all of them composited, then I2V with that single anchor |
+| Secondary characters who never appear in the anchor | See [`references/secondary-characters-from-text.md`](references/secondary-characters-from-text.md) — describe them only in the video prompt; their identity will NOT be locked |
 
-`generate_video_config.py` (config builder, not video generation) IS fast and safe for background mode. Only `wgp.py` itself must be foreground.
+For multi-frame keyframing details (dual-frame "SE" mode and beyond) see [`references/dual-frame-keyframing.md`](references/dual-frame-keyframing.md).
 
-### Semicolons in `--loras-multipliers`
+## LTX-2.3 prompt guide (compact)
 
-The shell splits `;` as a command separator. Unquoted `--loras-multipliers 0.5;1.5` becomes two commands: `--loras-multipliers 0.5` and `1.5`.
+**Anchor prompt ≠ video prompt.** The anchor (image) gets WHAT (static description); the video prompt gets HOW (motion, dialogue, audio). Never re-describe character / wardrobe / location detail in the video prompt — the model already sees it.
 
-**Fix:** Always double-quote multipliers:
+Video prompt rules:
 
-```bash
---loras-multipliers "0.5;1.5"
-```
+1. **One opening tableau sentence** matching the anchor composition: `INT/EXT — TIME-OF-DAY. The character stands by the window, dupatta catching the light...`. After that, no more static description.
+2. **Camera vocabulary**: dolly in/out, push-in, pull-back, pan, tilt, tracking, orbit, handheld shake. Pick one, name it. The model reacts to lens language.
+3. **Action via verbs**: gestures, body language, expressions IN MOTION. Not "she wears a red kurti" (static) but "she tugs the dupatta tighter as her shoulders drop" (motion).
+4. **Dialogue in "quotes"** with acting beats between lines: `"Hi doston..." (small pause, looks down, fidgets with the dupatta) "Han... main AI hun."`. The model speaks the quoted text and uses the beats as timing cues.
+5. **Audio direction explicit**: ambient sound, music genre, voice tone/accent, background score. `Audio: gentle acoustic guitar, distant temple bells, warm teenage-girl voice.`
+6. **Temporal connectors** glue moments: `as`, `then`, `while`, `before`, `after`. They are how the model paces.
+7. **No hard cuts in per-post I2V**: never write `CUT TO`, `JUMP CUT`, `MEANWHILE` for single-shot reels — evolve the frame via camera moves. (`CUT TO:` IS used and required for `continue_from` scenes in `wan2gp-movie-pipeline` — different mechanism.)
+8. **Duration cues** match `--video-length`. Default 481 frames ≈ 20 s @ 24 fps. For 30-40 s use sliding window (`--video-length 961 --sliding-window-size 481 --sliding-window-overlap 17`) and write a prompt that spans the whole duration. Each window generates independently — pure T2V across many windows produces disconnected output; always pair sliding window with `--image-start` or `--video-source`.
+9. **Match aspect to context**: `--aspect 9:16` (720x1280) for reels, `--aspect 16:9` (1280x720) for landscape. The flag auto-picks the right template.
+10. **Native audio**: LTX-2.3 generates audio directly from the prompt's dialogue + audio cues. For external audio sync use `--audio-guide FILE` (audio_prompt_type=`A`). For trend copy use `--video-guide FILE --video-prompt-type OVG --audio-from-control-video` (audio_prompt_type=`K`).
 
-### Loras multipliers format (CRITICAL)
+Deep dives: [`references/t2v-standalone-narrative.md`](references/t2v-standalone-narrative.md), [`references/dialogue-video-workflow.md`](references/dialogue-video-workflow.md), [`references/audio-conditioning-workflow.md`](references/audio-conditioning-workflow.md), [`references/meme-video-prompt-patterns.md`](references/meme-video-prompt-patterns.md), [`references/divine-deity-video-prompt-patterns.md`](references/divine-deity-video-prompt-patterns.md).
 
-`loras_multipliers` MUST be semicolon-separated **numbers only**, matching the order of `activated_loras` in the config.
+## Build flags (the ones agents need most)
 
-**WRONG (keyword=weight syntax fails):**
-```json
-"loras_multipliers": "CrispEnhance=0.5 VBVR=1.5"
-```
-Error: `Lora Multiplier no 1 (CrispEnhance=0.5) is invalid for task #1. Skipping.`
+| Flag | Purpose |
+|------|---------|
+| `--prompt "..."` | LTX-2.3 director-style prompt (rules above). Required unless `--run-json`. |
+| `--output-filename NAME` / `--output-dir PATH` | Required (basename, no ext) and destination folder. |
+| `--aspect 9:16 \| 16:9` | Sets resolution and picks T2V or I2V template. |
+| `--seed N` | Reproducibility. Same seed across a movie keeps look. |
+| `--model distilled-1.1 \| gguf` | Default `distilled-1.1` (8 steps, auto-LoRAs). `gguf` skips compile (~3 min). |
+| `--image-start PATH` | Anchor frame 0; switches to I2V via `image_prompt_type='S'`. |
+| `--image-end PATH` | End frame; auto-adds `E` (mode `SE`). |
+| `--image-refs P [P ...]` + `--frames-positions "120 240"` | Intermediate keyframe injection (`KFI`). |
+| `--video-source PATH` | Continue a previous video (`image_prompt_type='V'`). Mutually exclusive with `--image-start`. Used by movies. |
+| `--video-guide PATH --video-prompt-type {PVG,OVG,DVG,EVG,VG}` | Control video for motion / pose / depth / edges transfer. `OVG` requires `--image-start`. |
+| `--audio-guide PATH` | External audio conditioning (sets `audio_prompt_type='A'`). |
+| `--audio-from-control-video` | Use the control video's own audio track (sets `K`); needs `--video-guide` with `V` in the prompt type. |
+| `--video-length N` / `--sliding-window-size N` / `--sliding-window-overlap N` | Extended videos. Window default 481, max 501; overlap aligned to latent step (1, 9, 17, 25). |
+| `--loras-multipliers "0.5;1.5"` | Semicolons only, numbers only, same order as `activated_loras`. Always double-quote in shell. |
 
-**CORRECT (semicolon-separated numbers matching array order):**
-```json
-"activated_loras": ["LTX2.3_Crisp_Enhance.safetensors", "Ltx2.3-Licon-VBVR-I2V-96000-R32.safetensors"],
-"loras_multipliers": "0.5;1.5"
-```
+Full arg list: `python3 generate_video_config.py --help`.
 
-**Python subprocess:** `str(args.loras_multipliers)` produces `"0.5;1.5"` which is correct — no extra quoting needed in Python.
+## Tools you will need
 
-## `--process` vs `-c` vs `--config` (CRITICAL)
+| Tool | Purpose |
+|------|---------|
+| `scripts/generate_video_config.py` | Build / build+run / run-only the WanGP config (above). |
+| `scripts/monitor_video_gen.py <post-dir>` | Poll while wgp.py runs. Exit 0=completed, 1=running, 2=crashed. Prints elapsed minutes. |
+| `scripts/copy_trend.py` | Download a trend video, re-encode, build OVG config, launch. See [`references/copy-trend-workflow.md`](references/copy-trend-workflow.md). Known bug: does not set `audio_prompt_type='K'` itself — use `generate_video_config.py --video-guide ... --audio-from-control-video` instead. |
+| `video-create-workflow/scripts/compress_video.py` | ffmpeg compress raw mp4 (~30-40 MB) to Telegram-friendly (~3-5 MB). |
+| `video-create-workflow/scripts/cleanup_windows.py` | Prune partial sliding-window mp4s; keep only the final `(N).mp4`. |
+| `video-create-workflow/scripts/gpu_wait.py` / `kill_orphans.py` | GPU gating between consecutive runs. |
+| ffmpeg (system) | Extract a last frame for movie continuity: `ffmpeg -y -i in.mp4 -sseof -0.5 -frames:v 1 last.jpg` (use `ffprobe` to compute duration first; `-sseof` is unreliable on some mp4s). |
 
-**`--process <file>`** is the ONLY flag that accepts a single JSON settings file.
+## Sliding window output
 
-**`-c <file>`** and **`--config <file>`** do NOT accept JSON files — they produce `unrecognized arguments` or take a folder path instead.
+When `video_length > sliding_window_size`, WanGP writes one mp4 per window: `name.mp4`, `name(2).mp4`, ... The **last** file (`(N).mp4`) is the complete stitched video; the earlier files are partials. **Do NOT `ffmpeg concat` them** — that doubles content. Compress only the last file. `cleanup_windows.py` does the pruning for you. See [`references/sliding-window-output-files.md`](references/sliding-window-output-files.md).
 
-```bash
-# CORRECT — single JSON settings file
-$WAN_PYTHON wgp.py --fp16 --profile 4 --attention sage2 --process /path/to/video_generation.json
+## Benchmarks (RTX 4090, distilled-1.1, 1280x720)
 
-# WRONG — produces "unrecognized arguments: -c ..."
-$WAN_PYTHON wgp.py -c /path/to/video_generation.json
+| Scenario | First run | Cached |
+|----------|-----------|--------|
+| Standalone T2V | ~3:37 | ~3:30 |
+| I2V from anchor | ~3:35 | ~3:30 |
+| 30 s extended (2 windows) | ~7:15 | ~7:05 |
 
-# WRONG for files — --config takes a FOLDER, not a file
-$WAN_PYTHON wgp.py --config /path/to/video_generation.json
-```
+First-run cold compile is TorchInductor: 5–15 min CPU-bound, zero GPU output. Normal. `TORCHINDUCTOR_FORCE_DISABLE=1` skips it (faster start, slower per-step).
 
-**Rule:** When using `--process`, do NOT pass individual CLI args alongside it. All params must come from the JSON config.
+## Pitfalls (one line each)
 
-## `wgp.py has no execute permission (CRITICAL)
-```python
-import os
-env = os.environ.copy()  # ALWAYS start from os.environ to preserve PATH, SHELL, HOME
-with open('$PROFILE_ROOT/.env') as f:
-    for line in f:
-        if '=' in line and not line.startswith('#'):
-            k, v = line.split('=', 1)
-            env[k.strip()] = v.strip()
-```
+- Sequential only — never two `wgp.py` at once. Run `gpu_wait.py` before each background launch; lays wait until current job finishes.
+- Always background with `notify_on_complete=true` (see "Script modes" above). Never blocking shell call for GPU work.
+- `--process` is the ONLY flag that accepts a JSON file. `-c` and `--config` are wrong (take a folder).
+- LTX-2.3 native I2V (`image_mode: 1`) crashes at the VAE step. The builder uses the proven workaround: `image_mode: 0` + `image_prompt_type: 'S'` + `input_video_strength: 1`. Do not edit those manually.
+- Stale `__pycache__` can mask edits with `NameError: 'os' not defined`. Clear with `find <script-dir> -name '*.pyc' -delete && find <script-dir> -name __pycache__ -type d -exec rm -rf {} +`.
 
-**CRITICAL: Never build env from scratch.** If you do `env = {...}`, you'll lose PATH, SHELL, HOME and the subprocess will fail.
+## More references
 
-- [`references/t2v-standalone-narrative.md`](references/t2v-standalone-narrative.md) - Text-to-video workflow for standalone narrative scenes without character references
-- [`references/copy-trend-workflow.md`](references/copy-trend-workflow.md) - Trend copy via `copy_trend.py` with audio extraction, OVG pose transfer, and common pitfalls
-
-## Script: copy_trend.py
-
-The `scripts/copy_trend.py` helper orchestrates the full trend-copy pipeline: download → re-encode → config → launch.
-
-**Usage:**
-```bash
-python3 copy_trend.py \
-    --url "https://www.instagram.com/p/XXXXX/" \
-    --character-image "/path/to/character.png" \
-    --prompt "Describe character performing the trend..." \
-    --output-dir "/path/to/post/folder" \
-    --output-filename trend_copy \
-    --mode OVG \
-    --no-loras
-```
-
-**CRITICAL BUG:** `copy_trend.py` does NOT accept `--audio-from-control-video` and does NOT set `audio_prompt_type: "K"` internally. **You must manually add `c["audio_prompt_type"] = "K"` to the generated config** after running copy_trend.py, or the output video will be silent. See [`references/copy-trend-workflow.md`](references/copy-trend-workflow.md) for the full fix.
-- `references/wan-app-dir-discovery.md` - How to discover WanGP path when $WAN_APP_DIR is empty
-- `references/fallback-video-workflows.md` - Use manim for standalone 20s videos when WanGP unavailable
-- `references/dialogue-video-workflow.md` - Proper structure for videos with spoken dialogue
-- `references/sliding-window-output-files.md` - Critical: LAST file (N).mp4 contains the COMPLETE stitched video
-- `references/post-gen-compression.md` - Always compress WanGP output before Telegram delivery (18-56 MB → 2-8 MB via ffmpeg CRF 23)
-- `references/generator-vs-direct-workflow.md` - Trust generator scripts, don't manually edit configs
-- `references/cli-usage-pitfalls.md` - Never run WanGP CLI directly, use generator script
+`references/`: `cli-usage-pitfalls.md`, `dual-frame-keyframing.md`, `secondary-characters-from-text.md`, `oom-upsampling-fix.md`, `orphan-process-hang.md`, `torch-inductor-kill-switch.md`, `model_configs.md`, `ltx2-3-loras.md`, `audio-generation-limitations.md`, `compression-benchmarks.md`, `dialogue-video-workflow.md`, `audio-conditioning-workflow.md`, `copy-trend-workflow.md`, `divine-deity-video-prompt-patterns.md`, `meme-video-prompt-patterns.md`.
