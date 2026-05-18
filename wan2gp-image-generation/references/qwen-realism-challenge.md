@@ -80,3 +80,36 @@ For maximum photorealism:
 1. **Best**: Native resolution (928x1664) + 50 steps + `guidance_scale: 4` + `negative_prompt: " "`
 2. **Good**: 720x1280 + 50 steps + same parameters (for video anchors)
 3. **Draft only**: Lightning 4-step (composition preview, not photorealistic)
+
+---
+
+## Flux 2 Klein for Hindu/Divine Deity Generation (2026-05-12)
+
+**Use Case:** Generating realistic Hindu deity images (Lord Shiva, Durga, etc.) with specific cultural elements.
+
+**Confirmed Pattern:** Flux 2 Klein 9B excels for standalone character generation of divine/hindu deities with cultural attributes:
+
+**Visual Elements for Lord Shiva (successful 2026-05-12):**
+- "Third eye closed on forehead, glowing softly with inner divine light"
+- "Rudraksha beads, sacred ash on body"
+- "Flowing matted hair with river Ganga, crescent moon"
+- "Radiant cosmic being with serene, meditative expression"
+- "Surrounded by ethereal clouds and golden light rays"
+
+**Why Flux works better than Qwen for deities:**
+1. **Cultural accuracy:** Qwen tends to "hallucinate" elements (e.g., bindi as 3D gem instead of flat application)
+2. **Texture realism:** Sacred ash appears more natural (powdery, textured) with Flux
+3. **Speed:** ~35 seconds vs Qwen's ~3 minutes
+4. **Expression:** Serene/meditative expressions render more authentically
+
+**Prompt Structure (Flux template):**
+```
+Cinematic portrait of [deity name], a divine [tradition] deity. [Physical description]. Wearing [cultural elements]. [Environment/lighting]. Shot on Canon EOS R5, 85mm portrait lens, natural divine lighting, photorealistic. No hands visible, focus on face and upper body.
+```
+
+**Example prompt for Lord Shiva:**
+> "Cinematic portrait of Lord Shiva, a divine Hindu deity from heaven. A radiant cosmic being with a serene, meditative expression, third eye closed on forehead, glowing softly with inner divine light. Wearing rudraksha beads, sacred ash on body, flowing matted hair with river Ganga, crescent moon. Surrounded by ethereal clouds and golden light rays breaking through. Shot on Canon EOS R5, 85mm portrait lens, natural divine lighting, photorealistic. No hands visible, focus on face and upper body."
+
+**Output:** Realistic, culturally accurate deity image with proper texture and lighting.
+
+**Session evidence (2026-05-12):** `shiva_divine_character_anchor.jpg` generated successfully with Flux 2 Klein, seed 52000, accepted for divine message video.

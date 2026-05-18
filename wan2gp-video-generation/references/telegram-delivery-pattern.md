@@ -20,6 +20,27 @@
 
 **Recommendation:** Convert all deliverables to 192kbps/44.1kHz MP3 before sending to Telegram for best reliability.
 
+## Video Compression for Telegram
+
+**Problem:** WanGP generates ~50-57MB MP4s. Telegram can handle this but compression speeds delivery and reduces bandwidth.
+
+**Recommended compression:**
+```bash
+ffmpeg -y -i input.mp4 -vcodec libx264 -preset medium -crf 23 -acodec aac -b:a 128k -movflags +faststart output_tg_send.mp4
+```
+
+**Results (session 2026-05-17):** 56M → 8M, quality preserved. Use CRF 23 for balance — CRF 28 dropped to 3.7M but quality became blocky.
+
+**Key flags:**
+- `-crf 23` — quality compression (20-28 range, lower = better quality)
+- `-movflags +faststart` — enables streaming/web playback
+- `-preset medium` — balanced speed/quality
+- `-b:a 128k` — audio bitrate
+
+**Naming convention:** Suffix `_tg_send.mp4` so original is preserved.
+
+**When to compress:** Always compress before sending video to Telegram. 8MB range is sweet spot — fast delivery, no visible quality loss.
+
 ## Stems Delivery Pattern
 
 When delivering multiple stems via Telegram:

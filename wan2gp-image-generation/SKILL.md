@@ -198,10 +198,9 @@ Describe each reference by index in the prompt, with the slug for auditability:
 
 > **Pitfall: forgetting character_base.** When the user has a `character.png` base image, ALWAYS use it as the first image ref for character anchors. This locks identity across all posts. Do not generate a new character image from scratch.
 
-**Pitfall: `--ref-assets` doesn't guarantee visual presence in generated scenes.** Using only `--ref-assets <slug>` registers the asset and passes it as a reference, but the Qwen model may NOT visibly place the character in the new scene (it uses the ref as an identity lock, not necessarily as a composited element). When you NEED a character from the asset library to be **visibly present** in the generated image (not just used as an identity reference), **ALSO pass `--image-refs <absolute_path>`** with the actual file path. The `--image-refs` path is prepended to the `--ref-assets` paths, giving the model a stronger visual cue. Example:
-```bash
---ref-assets character_base --image-refs "/home/.../assets/character_base.jpg"
-```
+**Pitfall: `--ref-assets` doesn't guarantee visual presence in generated scenes.** Using only `--ref-assets <slug>` registers the asset and passes it as a reference, but the Qwen model may NOT visibly place the character in the new scene (it uses the ref as an identity lock, not necessarily as a composited element). When you NEED a character from the asset library to be **visibly present** in the generated image (not just used as an identity reference), **use `--image-refs <absolute_path>`** with the actual file path. This gives the model a stronger visual cue and sets the correct `video_prompt_type='I'` (single ref).
+
+> **DO NOT use `--ref-assets` AND `--image-refs` for the same character file.** This duplicates the image reference in the generated JSON config — the file gets loaded twice (refs=2 instead of refs=1, `video_prompt_type='KI'` instead of `'I'`). The helper script prepends `--image-refs` to `--ref-assets`-resolved paths, so the same file appears twice. For single-character scenes, `--image-refs` alone is sufficient and correct. Use `--ref-assets` only when you need multi-ref compositing (2-3 different characters/assets) where the manifest slug lookup provides the paths.
 **CRITICAL: Also reference images by index in the prompt.** Qwen Image Edit Plus uses the prompt to decide which ref goes where. Write "The character (image 1)" or "Ginnie (image 2)" in the prompt so Qwen knows which image ref to use. If you write "image 1" but the ref order is wrong, Qwen will swap characters. Example:
 ```bash
 --prompt "The accountant (image 1, character_accountant) sinks in water while Ginnie (image 2, character_base) reaches down..."
@@ -432,7 +431,13 @@ The helpers auto-pick `I` vs `KI` based on ref count and first-ref aspect, enfor
 ## Supporting references
 
 - [`references/model-style-limits.md`](references/model-style-limits.md) — Qwen 2511 and Flux Klein are fundamentally photorealistic; they CANNOT produce Pixar, cartoon, anime, or any stylized output. ComfyUI (SD/SDXL) is required for stylized generation.
-- [`references/qwen-realism-challenge.md`](references/qwen-realism-challenge.md) — Qwen's inherent hyper-perfect aesthetic and workarounds for documentary/photorealistic style.
+- [`references/qwen-realism-challenge.md`](references/qwen-realism-challenge.md) — Qwen's inherent hyper-perfect aesthetic and workarounds for documentary/photorealistic style. **Includes: Flux 2 Klein for Hindu/Divine Deity Generation patterns.**
+
+## Supporting references
+
+- [`references/model-style-limits.md`](references/model-style-limits.md) — Qwen 2511 and Flux Klein are fundamentally photorealistic; they CANNOT produce Pixar, cartoon, anime, or any stylized output. ComfyUI (SD/SDXL) is required for stylized generation.
+- [`references/qwen-realism-challenge.md`](references/qwen-realism-challenge.md) — Qwen's inherent hyper-perfect aesthetic and workarounds for documentary/photorealistic style. **Includes: Flux 2 Klein for Hindu/Divine Deity Generation patterns (Lord Shiva, Durga, etc.).**
+- [`references/divine-deity-video-prompt-patterns.md`](references/divine-deity-video-prompt-patterns.md) — Cross-skill reference: Prompt patterns for Hindu deity videos, visual elements, cultural accuracy, divine message workflow.
 
 - **Aspect ratio mismatch when regenerating existing assets.** When you regenerate an asset that already exists in `assets.json`, the `--aspect` flag sets the new aspect ratio but old files with the old aspect ratio may still exist on disk (renamed with `(2)` suffix or backup names). **Always check for stale files after regeneration:**
   - After `generate_asset.py --force --run`, check the assets directory for files matching the slug name that aren't the expected `slug.jpg` and `slug.json`

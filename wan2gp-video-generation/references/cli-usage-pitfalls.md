@@ -85,6 +85,30 @@ $WAN_PYTHON wgp.py --process "$POSTS_DIR/.../video_generation.json" \
 
 This also applies when running `wgp.py` directly (not via generate_video_config.py). If you use a terminal background process, make sure the working directory is set to WAN_APP_DIR, not the post directory.
 
+## I2V: `image_start` not `image_refs` (CRITICAL)
+
+For **image-to-video** generation, wgp.py reads the start image from the `image_start` field — **NOT** from `image_refs`. Putting the image only in `image_refs` produces:
+
+```
+[ERROR] You must provide a Start Image
+```
+
+Even if `image_refs` contains the path, validation at `wgp.py:534` checks `image_start == None` and fails.
+
+**Fix:** In the JSON config, use `image_start` (as a list) for the anchor image:
+
+```json
+// BROKEN (image only in image_refs):
+"image_start": "",
+"image_refs": ["/path/to/anchor.jpg"]
+
+// FIXED (image_start for I2V anchor):
+"image_start": ["/path/to/anchor.jpg"],
+"image_refs": []
+```
+
+The `image_refs` field is for reference images (character consistency), not for the I2V start frame.
+
 ## Background wrapper fails for wgp.py (CRITICAL)
 
 When launching `wgp.py --process` via the Hermes `terminal(background=true)` wrapper, the process uses the **system `python3`** (which lacks `torch`), NOT the WanGP virtual environment. This produces:
@@ -108,6 +132,30 @@ terminal(command="$WAN_PYTHON wgp.py --process $CONFIG --output-dir $OUTDIR --co
 ```
 
 **Why this matters:** Video generation takes 3-5 minutes. The foreground approach blocks the agent but works reliably. The background wrapper is unreliable for long-running WanGP jobs. For the split config-then-run approach (Step A → Step B), use Step A (config generation) which is fast and safe for background, but always run Step B (wgp.py) in the foreground.
+
+## I2V: `image_start` not `image_refs` (CRITICAL)
+
+For **image-to-video** generation, wgp.py reads the start image from the `image_start` field — **NOT** from `image_refs`. Putting the image only in `image_refs` produces:
+
+```
+[ERROR] You must provide a Start Image
+```
+
+Even if `image_refs` contains the path, validation at `wgp.py:534` checks `image_start == None` and fails.
+
+**Fix:** In the JSON config, use `image_start` (as a list) for the anchor image:
+
+```json
+// BROKEN (image only in image_refs):
+"image_start": "",
+"image_refs": ["/path/to/anchor.jpg"]
+
+// FIXED (image_start for I2V anchor):
+"image_start": ["/path/to/anchor.jpg"],
+"image_refs": []
+```
+
+The `image_refs` field is for reference images (character consistency), not for the I2V start frame.
 
 ## Quick reference command (multi-character dialogue reel)
 

@@ -187,6 +187,10 @@ def main() -> int:
                     help="Disable all LoRAs.")
     ap.add_argument("--activated-loras", nargs="*", default=None)
     ap.add_argument("--loras-multipliers", default=None)
+    ap.add_argument("--audio-from-control-video", action="store_true",
+                    help="Extract audio from the control video and use it as soundtrack. "
+                         "Auto-sets audio_prompt_type='K'. This is recommended for trend copy "
+                         "so the character video uses the same sound as the original reel.")
 
     args = ap.parse_args()
 
@@ -256,6 +260,8 @@ def main() -> int:
         config_cmd += ["--activated-loras"] + args.activated_loras
     if args.loras_multipliers:
         config_cmd += ["--loras-multipliers", args.loras_multipliers]
+    if args.audio_from_control_video:
+        config_cmd.append("--audio-from-control-video")
 
     print(f"[copy_trend] Generating config...", file=sys.stderr)
     result = subprocess.run(config_cmd, capture_output=True, text=True)
