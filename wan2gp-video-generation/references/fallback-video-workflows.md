@@ -13,8 +13,9 @@
 
 ### 1. Create project folder
 ```bash
-mkdir -p ~/posts/$(date +%Y-%m-%d)/scifi_2050_robots
-cd ~/posts/$(date +%Y-%m-%d)/scifi_2050_robots
+set -a; source $PROFILE_ROOT/.env; set +a
+POST_DIR=$(python3 "$PROFILE_SKILLS/video-create-workflow/scripts/new_post.py" --tag scifi_2050_robots)
+cd "$POST_DIR"
 ```
 
 ### 2. Write script.py

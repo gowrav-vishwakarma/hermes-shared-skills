@@ -92,7 +92,7 @@ TEMPLATES_DIR = SKILL_DIR / "templates"
 
 sys.path.insert(0, str(SCRIPT_DIR))
 try:
-    from _env import required  # type: ignore
+    from _env import required, resolve_path  # type: ignore
 finally:
     try:
         sys.path.remove(str(SCRIPT_DIR))
@@ -501,10 +501,10 @@ def main() -> int:
         sys.exit("[generate_video_config] --generate-only cannot be combined with --run / --generate-and-run / --run-json.")
 
     if args.run_json:
-        json_path = Path(args.run_json).expanduser().resolve()
+        json_path = resolve_path(args.run_json)
         if not json_path.is_file():
             sys.exit(f"[generate_video_config] --run-json: file not found: {json_path}")
-        out_dir = Path(args.output_dir).expanduser().resolve() if args.output_dir else json_path.parent
+        out_dir = resolve_path(args.output_dir) if args.output_dir else json_path.parent
         out_dir.mkdir(parents=True, exist_ok=True)
         if not WAN_APP_DIR.is_dir():
             print(f"[generate_video_config] WanGP app dir not found: {WAN_APP_DIR}", file=sys.stderr)
@@ -533,7 +533,7 @@ def main() -> int:
         sys.exit(f"[generate_video_config] missing required arg(s): {' '.join(missing)} "
                  f"(use --run-json PATH to run an existing JSON instead).")
 
-    out_dir = Path(args.output_dir).expanduser().resolve()
+    out_dir = resolve_path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     if args.resolution is None:

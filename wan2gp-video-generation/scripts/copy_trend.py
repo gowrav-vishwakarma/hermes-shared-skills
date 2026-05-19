@@ -40,6 +40,15 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 
+sys.path.insert(0, str(SCRIPT_DIR))
+try:
+    from _env import resolve_path  # type: ignore
+finally:
+    try:
+        sys.path.remove(str(SCRIPT_DIR))
+    except ValueError:
+        pass
+
 
 def _reencode_for_decord(raw_path: Path, output_dir: Path) -> Path:
     """Re-encode a video to H.264/AAC so WanGP's decord reader can parse it.
@@ -194,14 +203,14 @@ def main() -> int:
 
     args = ap.parse_args()
 
-    out_dir = Path(args.output_dir).expanduser().resolve()
+    out_dir = resolve_path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # --- Step 1: Get the trend video ---
     if args.url:
         trend_video = download_reel(args.url, out_dir)
     else:
-        trend_video = Path(args.trend_video).expanduser().resolve()
+        trend_video = resolve_path(args.trend_video)
         if not trend_video.is_file():
             raise SystemExit(f"[copy_trend] Trend video not found: {trend_video}")
         trend_video = _reencode_for_decord(trend_video, out_dir)
@@ -253,7 +262,7 @@ def main() -> int:
         "--video-length", str(video_length),
     ]
     if args.character_image:
-        config_cmd += ["--image-start", str(Path(args.character_image).expanduser().resolve())]
+        config_cmd += ["--image-start", str(resolve_path(args.character_image))]
     if args.no_loras:
         config_cmd.append("--no-loras")
     if args.activated_loras:

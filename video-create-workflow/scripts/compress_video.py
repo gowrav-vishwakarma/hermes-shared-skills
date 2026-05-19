@@ -24,6 +24,16 @@ import subprocess
 import sys
 from pathlib import Path
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR))
+try:
+    from _env import resolve_path  # type: ignore
+finally:
+    try:
+        sys.path.remove(str(SCRIPT_DIR))
+    except ValueError:
+        pass
+
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
@@ -38,7 +48,7 @@ def main() -> int:
                     help="Always compress, even if input is small.")
     args = ap.parse_args()
 
-    src = Path(args.input).expanduser().resolve()
+    src = resolve_path(args.input)
     if not src.is_file():
         sys.exit(f"[compress_video] not a file: {src}")
 
@@ -49,7 +59,7 @@ def main() -> int:
               file=sys.stderr)
         return 0
 
-    dst = Path(args.output).expanduser().resolve() if args.output else \
+    dst = resolve_path(args.output) if args.output else \
         src.with_name(f"{src.stem}_compressed.mp4")
 
     if not shutil.which("ffmpeg"):

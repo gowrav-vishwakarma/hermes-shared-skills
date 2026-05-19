@@ -8,7 +8,14 @@ category: media
 
 Single tool: `scripts/generate_video_config.py`. T2V vs I2V is auto-picked from `--image-start`.
 
-`$PROFILE_ROOT/.env` is **not** auto-sourced; run `set -a; source $PROFILE_ROOT/.env; set +a` first. Required env: `WAN_APP_DIR`, `WAN_PYTHON`, `PROFILE_HOME`, `PROFILE_SKILLS`.
+`$PROFILE_ROOT/.env` is **not** auto-sourced; run `set -a; source $PROFILE_ROOT/.env; set +a` first (**never** `source $PROFILE_HOME/.env`). Required env: `WAN_APP_DIR`, `WAN_PYTHON`, `PROFILE_HOME`, `PROFILE_SKILLS`, `POSTS_DIR`. **`--output-dir`** must be the folder from `new_post.py` (`$POSTS_DIR/<slug>/`), not `cron/output/` or any `~/.hermes/...` path — see [`../video-create-workflow/references/hermes-path-pitfall.md`](../video-create-workflow/references/hermes-path-pitfall.md).
+
+**CRITICAL — STYLE LIMITATION:** WanGP is strictly photorealistic. Both the base model (LTX-2.3) and the image models (Flux Klein, Qwen Image Edit) CANNOT produce Pixar, cartoon, anime, illustration, watercolor, or any non-photoreal style — no LoRA or prompt trick can change this on the WanGP base models. For stylized output, you MUST use:
+
+- **LTX-2.3 with style LoRAs** (Pixar_Toon, Claymation, Fantasy_Painterly, etc.) for **video**. These are applied via `--activated-loras` and `--loras-multipliers`.
+- **ComfyUI** (see `comfyui` skill) for image-only stylized work.
+
+**Rule of thumb:** If the prompt says "Pixar-style", "anime", "cartoon", "illustration", "painting", "watercolor", "oil painting", "digital art", or "animated" — WanGP will give you photorealism with those words literally interpreted as objects. Use LTX-2.3 LoRAs instead.
 
 ## Script modes (mutually exclusive)
 
@@ -20,7 +27,7 @@ Single tool: `scripts/generate_video_config.py`. T2V vs I2V is auto-picked from 
 
 **CRITICAL — GPU runs MUST be launched in background with notify:**
 
-`--generate-and-run` and `--run-json` block for 3-15 min (wgp.py holds the GPU). A new user message kills a blocking shell call. Always launch via:
+`--generate-and-run` and `--run-json` block for 3–15 min (wgp.py holds the GPU). A new user message kills a blocking shell call. Always launch via:
 
 ```
 terminal(
@@ -59,7 +66,7 @@ Video prompt rules:
 5. **Audio direction explicit**: ambient sound, music genre, voice tone/accent, background score. `Audio: gentle acoustic guitar, distant temple bells, warm teenage-girl voice.`
 6. **Temporal connectors** glue moments: `as`, `then`, `while`, `before`, `after`. They are how the model paces.
 7. **No hard cuts in per-post I2V**: never write `CUT TO`, `JUMP CUT`, `MEANWHILE` for single-shot reels — evolve the frame via camera moves. (`CUT TO:` IS used and required for `continue_from` scenes in `wan2gp-movie-pipeline` — different mechanism.)
-8. **Duration cues** match `--video-length`. Default 481 frames ≈ 20 s @ 24 fps. For 30-40 s use sliding window (`--video-length 961 --sliding-window-size 481 --sliding-window-overlap 17`) and write a prompt that spans the whole duration. Each window generates independently — pure T2V across many windows produces disconnected output; always pair sliding window with `--image-start` or `--video-source`.
+8. **Duration cues** match `--video-length`. Default 481 frames ≈ 20 s @ 24 fps. For 30–40 s use sliding window (`--video-length 961 --sliding-window-size 481 --sliding-window-overlap 17`) and write a prompt that spans the whole duration. Each window generates independently — pure T2V across many windows produces disconnected output; always pair sliding window with `--image-start` or `--video-source`.
 9. **Match aspect to context**: `--aspect 9:16` (720x1280) for reels, `--aspect 16:9` (1280x720) for landscape. The flag auto-picks the right template.
 10. **Native audio**: LTX-2.3 generates audio directly from the prompt's dialogue + audio cues. For external audio sync use `--audio-guide FILE` (audio_prompt_type=`A`). For trend copy use `--video-guide FILE --video-prompt-type OVG --audio-from-control-video` (audio_prompt_type=`K`).
 
@@ -93,10 +100,11 @@ Full arg list: `python3 generate_video_config.py --help`.
 | `scripts/generate_video_config.py` | Build / build+run / run-only the WanGP config (above). |
 | `scripts/monitor_video_gen.py <post-dir>` | Poll while wgp.py runs. Exit 0=completed, 1=running, 2=crashed. Prints elapsed minutes. |
 | `scripts/copy_trend.py` | Download a trend video, re-encode, build OVG config, launch. See [`references/copy-trend-workflow.md`](references/copy-trend-workflow.md). Known bug: does not set `audio_prompt_type='K'` itself — use `generate_video_config.py --video-guide ... --audio-from-control-video` instead. |
-| `video-create-workflow/scripts/compress_video.py` | ffmpeg compress raw mp4 (~30-40 MB) to Telegram-friendly (~3-5 MB). |
+| `video-create-workflow/scripts/compress_video.py` | ffmpeg compress raw mp4 (~30–40 MB) to Telegram-friendly (~3–5 MB). |
 | `video-create-workflow/scripts/cleanup_windows.py` | Prune partial sliding-window mp4s; keep only the final `(N).mp4`. |
 | `video-create-workflow/scripts/gpu_wait.py` / `kill_orphans.py` | GPU gating between consecutive runs. |
 | ffmpeg (system) | Extract a last frame for movie continuity: `ffmpeg -y -i in.mp4 -sseof -0.5 -frames:v 1 last.jpg` (use `ffprobe` to compute duration first; `-sseof` is unreliable on some mp4s). |
+| ffmpeg (system) | Add static title text overlay to existing videos: `drawtext` filter, see `## Pitfalls` below. |
 
 ## Sliding window output
 
@@ -114,12 +122,33 @@ First-run cold compile is TorchInductor: 5–15 min CPU-bound, zero GPU output. 
 
 ## Pitfalls (one line each)
 
-- Sequential only — never two `wgp.py` at once. Run `gpu_wait.py` before each background launch; lays wait until current job finishes.
+- Sequential only — never two `wgp.py` jobs at once. Run `gpu_wait.py` before each background launch; lays wait until current job finishes.
 - Always background with `notify_on_complete=true` (see "Script modes" above). Never blocking shell call for GPU work.
+- **ALWAYS deliver videos directly here in Telegram** — when generating video content, send the output to the user's Telegram chat immediately after completion. Don't ask "where should I send it" — just deliver it here. (User preference, 2026-05-18.)
 - `--process` is the ONLY flag that accepts a JSON file. `-c` and `--config` are wrong (take a folder).
 - LTX-2.3 native I2V (`image_mode: 1`) crashes at the VAE step. The builder uses the proven workaround: `image_mode: 0` + `image_prompt_type: 'S'` + `input_video_strength: 1`. Do not edit those manually.
 - Stale `__pycache__` can mask edits with `NameError: 'os' not defined`. Clear with `find <script-dir> -name '*.pyc' -delete && find <script-dir> -name __pycache__ -type d -exec rm -rf {} +`.
+- **CozyFelt LoRA verified working (2026-05-18).** CozyFelt.safetensors at 1.5x produces a distinct felt-craft / stop-motion puppet texture. Good for whimsical animal characters in cozy environments. Confirmed with GGUF model, ~3.5 min gen time.
+
+## Anatomy Precision Pitfalls
+
+**CRITICAL: When generating animals/creatures with limbs and appendages, the LTX-2.3 model will invent extra limbs, merge hands, or mess up anatomy WITHOUT explicit constraints.**
+
+- **Always state exact limb count explicitly:** "exactly two legs, exactly two arms" — use the word "exactly" to prevent the model from adding extra.
+- **Describe appendage function clearly:** "trunk holding lantern — trunk wraps around the handle, lantern hanging down in front" — be specific about HOW the appendage interacts with objects.
+- **Add negative constraints:** "no extra limbs, no messy anatomy, clear four-limb structure" — tell the model what NOT to do.
+- **Use the word "limbs" and "four-limb" explicitly** — the model responds to this structural language.
+- **Anatomy corrections are common** — if the first output has weird legs/hands, regenerate with the same prompt but add "EXACTLY two legs, exactly two arms" in ALL CAPS for emphasis.
+- **Test anatomy at high multipliers** — CozyFelt and Pixar_Toon at 1.5x exaggerate features, which can make anatomy issues MORE visible.
+
+- **"no text on video" directive** — If you do NOT want the model rendering text onto the video frame (titles, watermarks, captions), ALWAYS add "No text on video" to the prompt. LTX-2.3 may otherwise interpret keywords like "WANTED" or "HIRING" as text to render visually.
+- **Capitalized words mispronounce** — ALL-CAPS words like "WANTED", "HIRING", "NOW" often come out garbled or with weird stress in LTX-2.3's TTS. Use lowercase or reword: "wanted" → "looking for", "HIRING" → "we need", "NOW" → "today". Test by reading dialogue aloud yourself — if it sounds awkward, the model will struggle too.
+- **Short punchy lines > long monologues** — LTX-2.3 handles dialogue best when lines are short and punchy (max 3–4 seconds per quoted line). Long quoted passages get stretched or slurped. Break dialogue into 2–3 second segments with acting beats between them.
+- **Title overlays for job posts** — For hiring/job post videos, use ffmpeg drawtext for overlay titles instead of trying to render text in-video. LTX-2.3 can't do clean typography. Use the ffmpeg pattern below.
+- **ffmpeg drawtext colon bug** — If the overlay text contains colons, apostrophes, or other special chars, ALWAYS use `textfile='/path/to/file'` instead of `text='...'`. ffmpeg's parser breaks on these characters inline.
+- **ffmpeg drawtext enable comma bug** — Inside `enable='between(t,0,3)'`, commas must be escaped as `\\\\,` in shell: `enable='between(t\\\\,0\\\\,3)'`. Or omit enable for the full duration.
+- **Simple overlays > HyperFrames** — When just adding a static title/caption to an existing video, ffmpeg drawtext is instant vs HyperFrames' heavy scaffold/render cycle. Use ffmpeg for simple overlays, HyperFrames for complex multi-scene compositions.
 
 ## More references
 
-`references/`: `cli-usage-pitfalls.md`, `dual-frame-keyframing.md`, `secondary-characters-from-text.md`, `oom-upsampling-fix.md`, `orphan-process-hang.md`, `torch-inductor-kill-switch.md`, `model_configs.md`, `ltx2-3-loras.md`, `audio-generation-limitations.md`, `compression-benchmarks.md`, `dialogue-video-workflow.md`, `audio-conditioning-workflow.md`, `copy-trend-workflow.md`, `divine-deity-video-prompt-patterns.md`, `meme-video-prompt-patterns.md`.
+`references/`: `cli-usage-pitfalls.md`, `dual-frame-keyframing.md`, `secondary-characters-from-text.md`, `oom-upsampling-fix.md`, `orphan-process-hang.md`, `torch-inductor-kill-switch.md`, `model_configs.md`, `ltx2-3-loras.md`, `audio-generation-limitations.md`, `compression-benchmarks.md`, `dialogue-video-workflow.md`, `audio-conditioning-workflow.md`, `copy-trend-workflow.md`, `divine-deity-video-prompt-patterns.md`, `meme-video-prompt-patterns.md`, `telegram-aggressive-compression.md`, `anatomy-control-prompting.md`.

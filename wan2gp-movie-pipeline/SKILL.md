@@ -14,7 +14,7 @@ metadata:
 
 For single posts → `video-create-workflow`. For 3+ connected scenes → this skill.
 
-`$PROFILE_ROOT/.env` is **not** auto-sourced; run `set -a; source $PROFILE_ROOT/.env; set +a` first. Required env: `PROFILE_HOME`, `PROFILE_SKILLS`, `POSTS_DIR`, `WAN_APP_DIR`, `WAN_PYTHON`, `CHARACTER_BASE`. **NOT** used: `CHARACTER_ASSETS_DIR`, `CHARACTER_ASSETS_MANIFEST` — movies are self-contained.
+`$PROFILE_ROOT/.env` is **not** auto-sourced; run `set -a; source $PROFILE_ROOT/.env; set +a` first (**never** `source $PROFILE_HOME/.env`). Required env: `PROFILE_HOME`, `PROFILE_SKILLS`, `POSTS_DIR`, `WAN_APP_DIR`, `WAN_PYTHON`, `CHARACTER_BASE`. **NOT** used: `CHARACTER_ASSETS_DIR`, `CHARACTER_ASSETS_MANIFEST` — movies are self-contained. Paths: [`../video-create-workflow/references/hermes-path-pitfall.md`](../video-create-workflow/references/hermes-path-pitfall.md).
 
 ## Folder convention
 

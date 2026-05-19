@@ -157,6 +157,18 @@ Even if `image_refs` contains the path, validation at `wgp.py:534` checks `image
 
 The `image_refs` field is for reference images (character consistency), not for the I2V start frame.
 
+## `--frames` is not a valid flag (CRITICAL)
+
+Passing `--frames N` to `generate_video_config.py` is **not supported**. The script has no `--frames` argument. Attempting to use it either gets silently ignored or causes downstream errors in the JSON config (e.g., `image_start` never populated).
+
+**Fix:** Omit `--frames` entirely. For T2V, the script auto-uses the T2V template. For I2V, pass `--image-start PATH`. The video length is controlled by `--video-length` (default 481 frames ≈ 20 s).
+
+## `--model gguf` may hang silently for LTX-2.3
+
+When using `--model gguf` with LTX-2.3, the GGUF model loading can hang with **zero output** for 40+ seconds and beyond, with no visible progress or error. This is distinct from the `distilled-1.1` model, which at least shows TorchInductor compilation output.
+
+**Fix:** Always prefer `--model distilled-1.1` for LTX-2.3. The cold compile takes 5–15 min on first run but proceeds reliably. GGUF may work in some sessions but is unstable for LTX-2.3. Do NOT use `--model gguf` as a shortcut for LTX-2.3 video generation.
+
 ## Quick reference command (multi-character dialogue reel)
 
 ```bash

@@ -24,7 +24,7 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 try:
-    from _env import required  # type: ignore
+    from _env import required, resolve_path  # type: ignore
 finally:
     try:
         sys.path.remove(str(SCRIPT_DIR))
@@ -48,7 +48,7 @@ def main() -> int:
                     help="Sort by mtime descending instead of path.")
     args = ap.parse_args()
 
-    root = Path(args.root).expanduser().resolve() if args.root else DEFAULT_ROOT.resolve()
+    root = resolve_path(args.root) if args.root else DEFAULT_ROOT.resolve()
     if not root.is_dir():
         sys.exit(f"[find_media] not a directory: {root}")
 

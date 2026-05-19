@@ -27,6 +27,16 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR))
+try:
+    from _env import resolve_path  # type: ignore
+finally:
+    try:
+        sys.path.remove(str(SCRIPT_DIR))
+    except ValueError:
+        pass
+
 _PAREN_RE = re.compile(r"^(?P<base>.+?)\((?P<idx>\d+)\)\.mp4$")
 
 
@@ -55,7 +65,7 @@ def main() -> int:
                     help="Show what would be deleted, change nothing.")
     args = ap.parse_args()
 
-    folder = Path(args.folder).expanduser().resolve()
+    folder = resolve_path(args.folder)
     if not folder.is_dir():
         sys.exit(f"[cleanup_windows] not a directory: {folder}")
 

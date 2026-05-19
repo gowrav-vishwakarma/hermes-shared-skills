@@ -7,7 +7,7 @@ KeyError: 'PATH'
 ```
 
 ## Why it happens
-The `.env` file (e.g., `~/.hermes/profiles/gvs/.env`) contains WAN-specific variables. When you do:
+The profile `.env` file (e.g. `$PROFILE_ROOT/.env` after `set -a; source $PROFILE_ROOT/.env; set +a`) contains WAN-specific variables. Do **not** reference it as `~/.hermes/profiles/...` in shell commands — `~` expands to `$PROFILE_HOME` inside Hermes (see `video-create-workflow/references/hermes-path-pitfall.md`). When you do:
 ```python
 env = {}
 with open('.env') as f:

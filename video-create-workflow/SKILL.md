@@ -12,7 +12,9 @@ metadata:
 
 # Per-Post Video Workflow
 
-One post = one anchor image + one ~20 s video in `$POSTS_DIR/<YYYY-MM-DD_#>/`.
+One post = one or more anchor image(s) + one ~20 s video in `$POSTS_DIR/<YYYY-MM-DD_#>/`.
+
+First always find characters needed in whole video even if they are not in first frame, and make first/last or intermediate anchor image first with characters to keep characters consistent. and then define those as anchor image (image start, image end or images at certain frame).
 
 ## Route first
 
@@ -45,7 +47,9 @@ All operations are scripts in `$PROFILE_SKILLS/video-create-workflow/scripts/`. 
 | Append a journey entry (atomic) | `journey_append.py --n N --date ... --slug ... --aspect ... --location ... --beat ... --anchor-file ... --reel-file ... [--assets-used a b c]` |
 | Rewrite `<Character> State:` line | `memory_update.py --character ... --prev ... --current ... --last-beat ... --next-hint ... --active-assets a,b,c` |
 
-`$PROFILE_ROOT/.env` is **not** auto-sourced. Run `set -a; source $PROFILE_ROOT/.env; set +a` once per shell. Scripts fail loudly if `POSTS_DIR`, `MEMORY_FILE`, `JOURNEY_FILE`, `CHARACTER_ASSETS_DIR`, `CHARACTER_ASSETS_MANIFEST`, `CHARACTER_BASE`, `WAN_APP_DIR`, `PROFILE_HOME`, or `PROFILE_SKILLS` is missing.
+`$PROFILE_ROOT/.env` is **not** auto-sourced. Run `set -a; source $PROFILE_ROOT/.env; set +a` once per shell — always use the **absolute** profile root path (e.g. `/home/gowrav/.hermes/profiles/<name>/.env`). **Never** `source $PROFILE_HOME/.env` (`.env` is at profile root, not under `home/`). Inside Hermes, `$HOME` and `~` map to `$PROFILE_HOME`, **not** `/home/<user>` — never use `~/.hermes/...` or `$HOME/.hermes/...` in commands or `--output-dir`; that creates a phantom path under `home/.hermes/profiles/...`. Full rules: [`references/hermes-path-pitfall.md`](references/hermes-path-pitfall.md).
+
+**Posts only under `$POSTS_DIR`** — use `new_post.py` for every reel; **never** `$PROFILE_ROOT/cron/output/` for GPU renders (`cron/output/` is Hermes cron markdown logs only). Scripts fail loudly if required env vars are missing or paths are phantom-nested.
 
 **Rule for every GPU call (image gen, video gen, movie pipeline): launch as `terminal(background=true, notify_on_complete=true)`.** A new user message kills a blocking shell; it does NOT kill a Hermes background task.
 
@@ -87,6 +91,17 @@ All operations are scripts in `$PROFILE_SKILLS/video-create-workflow/scripts/`. 
 - **Video prompt** = HOW it MOVES: camera move, action, dialogue in quotes, audio direction, temporal connectors (as / then / while / before / after). Open with ONE tableau sentence matching the anchor (INT/EXT, pose, light); after that PURE motion.
 - Never re-describe the character or wardrobe in the video prompt — the anchor already shows it.
 - Default no hard cuts in per-post I2V (no `CUT TO:`, no `JUMP CUT`). Evolve the frame with camera moves. Movies use `CUT TO:` differently — see `wan2gp-movie-pipeline`.
+
+## Pitfalls
+
+- **Never poll a process launched with `notify_on_complete=true`** — it auto-notifies on completion. Polling wastes tokens and leads to killing it accidentally (exit 143 = SIGTERM from the kill, not a real error). If you need status, use the tool's own status mechanism (e.g. `monitor_video_gen.py` for GPU tasks).
+- **Never kill a background process unless explicitly asked** — killing wastes work already done (model compiled, denoising started). Only kill when the user says so or when a process is truly stuck (no progress for 30+ minutes on a fast step).
+
+## User Delivery Preferences
+
+- **Always deliver videos directly to the current Telegram chat** when generating in conversation context. User said: "Always send me vids here when I am talking from this." Do not ask — just send.
+- **Compress before Telegram delivery.** Videos from WanGP are ~30MB; Telegram delivery may timeout. Compress first (`ffmpeg -crf 30 -preset faster -acodec aac -b:a 64k`) to bring under ~5MB.
+- **If Telegram send times out**, retry from `/tmp/` path (more reliable than nested profile paths).
 
 ## Delegation
 

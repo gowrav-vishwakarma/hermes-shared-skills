@@ -38,7 +38,7 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 try:
-    from _env import required  # type: ignore
+    from _env import required, resolve_path  # type: ignore
 finally:
     try:
         sys.path.remove(str(SCRIPT_DIR))
@@ -66,7 +66,7 @@ def main() -> int:
     if not args.name.replace("_", "").isalnum():
         sys.exit(f"[register_asset] invalid slug {args.name!r}; use snake_case alphanumerics.")
 
-    img = Path(args.path).expanduser().resolve()
+    img = resolve_path(args.path)
     if not img.is_file():
         sys.exit(f"[register_asset] path does not exist: {img}")
 

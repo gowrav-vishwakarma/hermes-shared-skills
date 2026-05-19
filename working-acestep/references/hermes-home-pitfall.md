@@ -29,8 +29,12 @@ Then run the wrapper or server launcher.
 - **acestep**: `acestep-hermes.sh` → `start_api_server.sh` checks `$HOME/.local/bin/uv`
 - **pipx / cargo**: Any tool installed via pipx/cargo at `~/.local/bin/` or `~/.cargo/bin/`
 
+## Phantom nested paths (WanGP / video)
+
+Using `~/.hermes/profiles/<name>/...` in `--output-dir` or `source $HOME/.hermes/...` creates files under `home/.hermes/profiles/<name>/...` instead of the real profile tree. See [`../../video-create-workflow/references/hermes-path-pitfall.md`](../../video-create-workflow/references/hermes-path-pitfall.md).
+
 ## Prevention
 Before any skill that calls scripts relying on `$HOME/.local/bin`:
-1. `echo $HOME` to verify it points to the real user home
-2. If wrong, `export PATH="/home/<user>/.local/bin:$PATH"` first
-3. Then proceed with the skill's commands
+1. `echo $HOME` — in Hermes it will show `$PROFILE_HOME`, not `/home/<user>`
+2. `export PATH="/home/<user>/.local/bin:$PATH"` using the real system username
+3. For video/image paths, use `$POSTS_DIR` and `new_post.py`, never `~/.hermes/...`

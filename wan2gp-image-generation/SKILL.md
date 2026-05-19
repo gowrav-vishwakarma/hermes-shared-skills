@@ -14,7 +14,7 @@ Three job types come out of this skill — all via the same script:
 | Reusable library asset (renders + registers in `assets.json`) | `scripts/generate_asset.py` | Wraps the above + manifest |
 | Remove / list registered assets | `scripts/remove_asset.py` | `--list`, `--keep-only`, `--keep-files` |
 
-`$PROFILE_ROOT/.env` is **not** auto-sourced; run `set -a; source $PROFILE_ROOT/.env; set +a` first. Required env (resolved by `_env.py`): `WAN_APP_DIR`, `WAN_PYTHON`, `CHARACTER_ASSETS_DIR`, `CHARACTER_ASSETS_MANIFEST`, `CHARACTER_BASE`, `PROFILE_HOME`.
+`$PROFILE_ROOT/.env` is **not** auto-sourced; run `set -a; source $PROFILE_ROOT/.env; set +a` first (**never** `source $PROFILE_HOME/.env`). Required env (resolved by `_env.py`): `WAN_APP_DIR`, `WAN_PYTHON`, `CHARACTER_ASSETS_DIR`, `CHARACTER_ASSETS_MANIFEST`, `CHARACTER_BASE`, `PROFILE_HOME`, `POSTS_DIR`. **`--output-dir`** = path from `new_post.py`, not `~/.hermes/...` — see [`../video-create-workflow/references/hermes-path-pitfall.md`](../video-create-workflow/references/hermes-path-pitfall.md).
 
 ## Model preference (PICK FLUX UNLESS YOU NEED MULTI-REF)
 

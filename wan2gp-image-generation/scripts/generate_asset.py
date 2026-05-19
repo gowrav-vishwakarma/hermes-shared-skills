@@ -44,7 +44,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 
 sys.path.insert(0, str(SCRIPT_DIR))
 try:
-    from _env import required  # type: ignore
+    from _env import required, resolve_path  # type: ignore
 finally:
     try:
         sys.path.remove(str(SCRIPT_DIR))
@@ -190,7 +190,7 @@ def main() -> int:
             file=sys.stderr,
         )
 
-    assets_dir = Path(args.assets_dir).expanduser().resolve()
+    assets_dir = resolve_path(args.assets_dir) if args.assets_dir else ASSETS_DIR
     assets_dir.mkdir(parents=True, exist_ok=True)
 
     # Pre-check: refuse to clobber unless --force.
