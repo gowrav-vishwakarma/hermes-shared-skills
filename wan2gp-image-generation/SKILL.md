@@ -124,9 +124,13 @@ ffmpeg -y -i input.png -vf "crop=720:1280:(in_w-720)/2:(in_h-1280)/2" output.png
 - Sequential only — never two `wgp.py` jobs at once. Use `video-create-workflow/scripts/gpu_wait.py` before launching.
 - Don't pass the same file in both `--ref-assets` and `--image-refs`; it gets duplicated, switching the mode from `I` to `KI`.
 - Flux can't subdir in `--output-filename`; point `--output-dir` directly at the target folder.
+- Flux outputs `.jpg` by default, not `.png`. The `--output-filename` flag has no effect on extension — it's hardcoded to `.jpg`. Always expect `.jpg` output and rename externally if the pipeline needs `.png`.
 - For temp / one-off images the user says "don't save": use `generate_image_config.py` (writes only to your post folder), NOT `generate_asset.py` (which registers in the manifest).
 - 4:3 / square user-supplied photos that are centered on a solid background should be cropped with ffmpeg (above) instead of WanGP-regenerated.
 - First Qwen run cold-compiles for 5–10 min with zero visible output — that is normal.
+- Batch asset generation: launch each asset as `terminal(background=true, notify_on_complete=true)`, then wait with `process(action='wait')` — not repeated `poll()`. Polling risks killing the job accidentally; `wait` is safe and blocks until the GPU process exits cleanly. First GPU job takes longer (cold compile); subsequent jobs ~20–25s each.
+- First Qwen run cold-compiles for 5–10 min with zero visible output — that is normal.
+- Batch generation workflow: launch each asset as `terminal(background=true, notify_on_complete=true)`, then use `process(action='wait', session_id=...)` per asset rather than repeated polling. The first GPU job takes longer (cold compile ~30-60s); subsequent jobs are ~20-25s.
 
 ## References
 
